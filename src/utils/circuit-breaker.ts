@@ -5,6 +5,10 @@
  * States: CLOSED (normal) → OPEN (failing) → HALF_OPEN (testing)
  */
 
+import { createLogger } from "../logging";
+
+const log = createLogger("circuit-breaker");
+
 export type CircuitState = "CLOSED" | "OPEN" | "HALF_OPEN";
 
 export interface CircuitBreakerConfig {
@@ -119,9 +123,11 @@ export class CircuitBreaker {
 
     if (this.state === "HALF_OPEN") {
       this.halfOpenSuccesses++;
-      console.log(
-        `[circuit-breaker:${this.config.name}] Half-open success ${this.halfOpenSuccesses}/${this.config.successThreshold}`
-      );
+      log.info("Half-open success", {
+        name: this.config.name,
+        successes: this.halfOpenSuccesses,
+        threshold: this.config.successThreshold,
+      });
 
       if (this.halfOpenSuccesses >= this.config.successThreshold) {
         this.transitionTo("CLOSED");
@@ -139,9 +145,7 @@ export class CircuitBreaker {
 
     if (this.state === "HALF_OPEN") {
       // Any failure in half-open goes back to open
-      console.log(
-        `[circuit-breaker:${this.config.name}] Half-open failure, reopening circuit`
-      );
+      log.info("Half-open failure, reopening circuit", { name: this.config.name });
       this.transitionTo("OPEN");
       return;
     }
@@ -150,9 +154,11 @@ export class CircuitBreaker {
       // Check if we've exceeded the failure threshold
       const recentFailures = this.getRecentFailures();
       if (recentFailures >= this.config.failureThreshold) {
-        console.log(
-          `[circuit-breaker:${this.config.name}] Failure threshold reached (${recentFailures}/${this.config.failureThreshold}), opening circuit`
-        );
+        log.warn("Failure threshold reached, opening circuit", {
+          name: this.config.name,
+          failures: recentFailures,
+          threshold: this.config.failureThreshold,
+        });
         this.transitionTo("OPEN");
       }
     }
@@ -189,9 +195,11 @@ export class CircuitBreaker {
       this.halfOpenSuccesses = 0;
     }
 
-    console.log(
-      `[circuit-breaker:${this.config.name}] State transition: ${oldState} → ${newState}`
-    );
+    log.info("State transition", {
+      name: this.config.name,
+      from: oldState,
+      to: newState,
+    });
   }
 
   /**

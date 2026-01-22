@@ -18,6 +18,9 @@ import {
 } from "./types";
 import { elkLayout } from "./elk";
 import { gridLayout, circularLayout } from "./simple";
+import { createLogger } from "../logging";
+
+const log = createLogger("layout");
 
 // Available layout algorithms with descriptions
 export const LAYOUT_ALGORITHMS: Record<LayoutAlgorithm, { name: string; description: string }> = {
@@ -132,7 +135,7 @@ function dagreLayout(graph: LayoutGraph, options: LayoutOptions): LayoutResult {
     }
 
     const duration = performance.now() - startTime;
-    console.log(`[layout] Dagre completed in ${duration.toFixed(2)}ms`);
+    log.info("Dagre layout completed", { durationMs: duration.toFixed(2) });
 
     return {
       success: true,

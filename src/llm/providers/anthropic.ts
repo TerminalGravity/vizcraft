@@ -19,6 +19,9 @@ import type {
 } from "../types";
 import { DiagramTransformOutputSchema } from "../types";
 import type { DiagramSpec } from "../../types";
+import { createLogger } from "../../logging";
+
+const log = createLogger("anthropic");
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -197,7 +200,7 @@ export class AnthropicProvider implements LLMProvider {
         const parseResult = DiagramTransformOutputSchema.safeParse(toolUse.input);
 
         if (!parseResult.success) {
-          console.error("[anthropic] Invalid tool output:", parseResult.error.message);
+          log.error("Invalid tool output", { error: parseResult.error.message });
           if (attempt < maxRetries) {
             await this.delay(Math.pow(2, attempt) * 500); // Exponential backoff
             continue;
@@ -245,7 +248,7 @@ export class AnthropicProvider implements LLMProvider {
         };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        console.error(`[anthropic] Attempt ${attempt + 1} failed:`, lastError.message);
+        log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
         if (attempt < maxRetries) {
           await this.delay(Math.pow(2, attempt) * 500);

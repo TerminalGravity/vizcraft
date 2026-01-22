@@ -99,6 +99,9 @@ import {
   getThumbnailCleanupStats,
 } from "./storage/thumbnails";
 import { audit, getAuditLog, getAuditStats, getAuditContext, isValidAuditAction } from "./audit";
+import { createLogger } from "./logging";
+
+const log = createLogger("web");
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -147,7 +150,7 @@ function isLocalhostOrigin(origin: string): boolean {
 
 // Log CORS configuration in development
 if (process.env.NODE_ENV !== "production") {
-  console.log(`[CORS] Allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
+  log.info("CORS allowed origins", { origins: ALLOWED_ORIGINS });
 }
 
 // Middleware
@@ -166,7 +169,7 @@ app.use(
 
       // Defense-in-depth: reject oversized origins to prevent DoS
       if (origin.length > MAX_ORIGIN_LENGTH) {
-        console.warn(`[CORS] Rejected oversized origin (${origin.length} chars)`);
+        log.warn("Rejected oversized origin", { length: origin.length });
         return null;
       }
 
@@ -202,9 +205,9 @@ app.use("*", securityHeaders({
 // Note: CompressionStream is a Web API that may not be available in all runtimes
 if (typeof globalThis.CompressionStream !== "undefined") {
   app.use("/api/*", responseCompression());
-  console.log("[compression] Response compression enabled for API routes");
+  log.info("Response compression enabled for API routes");
 } else {
-  console.log("[compression] CompressionStream not available, skipping compression");
+  log.info("CompressionStream not available, skipping compression");
 }
 
 // API-specific security headers (more restrictive)
@@ -216,7 +219,7 @@ app.use("/api/*", optionalAuth());
 
 // Global error handler
 app.onError((err, c) => {
-  console.error(`[API Error] ${c.req.method} ${c.req.path}:`, err);
+  log.error("API error", { method: c.req.method, path: c.req.path, error: err instanceof Error ? err.message : String(err) });
 
   if (err instanceof APIError) {
     return errorResponse(c, err.code, err.message, err.status as 400 | 404 | 500);
@@ -552,7 +555,7 @@ app.get("/api/diagrams", async (c) => {
   } catch (err) {
     // Handle timeout specifically with 408 Request Timeout
     if (err instanceof TimeoutError) {
-      console.warn(`[API] List diagrams timed out after ${err.timeoutMs}ms`);
+      log.warn("List diagrams timed out", { timeoutMs: err.timeoutMs });
       return errorResponse(
         c,
         "REQUEST_TIMEOUT",
@@ -671,7 +674,7 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
 
     return c.json(diagram, 201);
   } catch (err) {
-    console.error("POST /api/diagrams error:", err);
+    log.error("Create diagram failed", { error: err instanceof Error ? err.message : String(err) });
     if (err instanceof SyntaxError) {
       return errorFromCode(c, ApiError.INVALID_JSON);
     }
@@ -772,7 +775,7 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
 
     return c.json(result);
   } catch (err) {
-    console.error("PUT /api/diagrams/:id error:", err);
+    log.error("Update diagram failed", { error: err instanceof Error ? err.message : String(err) });
     if (err instanceof PermissionDeniedError) throw err;
     if (err instanceof SyntaxError) {
       return errorFromCode(c, ApiError.INVALID_JSON);
@@ -819,7 +822,7 @@ app.delete("/api/diagrams/:id", async (c) => {
     return operationResponse(c, true);
   } catch (err) {
     if (err instanceof PermissionDeniedError) throw err;
-    console.error("DELETE /api/diagrams/:id error:", err);
+    log.error("Delete diagram failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.DELETE_FAILED);
   }
 });
@@ -856,7 +859,7 @@ app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
     return operationResponse(c, success);
   } catch (err) {
     if (err instanceof PermissionDeniedError) throw err;
-    console.error("PUT /api/diagrams/:id/thumbnail error:", err);
+    log.error("Update thumbnail failed", { error: err instanceof Error ? err.message : String(err) });
     if (err instanceof SyntaxError) {
       return errorFromCode(c, ApiError.INVALID_JSON);
     }
@@ -895,7 +898,7 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
       },
     });
   } catch (err) {
-    console.error("GET /api/diagrams/:id/thumbnail error:", err);
+    log.error("Load thumbnail failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.THUMBNAIL_LOAD_FAILED);
   }
 });
@@ -1000,7 +1003,7 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
       newVersion: restored.version,
     }, getAuditContext(c.req.raw));
 
-    console.log(`[versioning] Restored diagram ${id} to version ${versionNum}`);
+    log.info("Restored diagram", { diagramId: id, version: versionNum });
     return c.json({
       success: true,
       diagram: restored,
@@ -1009,7 +1012,7 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     if (err instanceof PermissionDeniedError) throw err;
-    console.error("POST /api/diagrams/:id/restore/:version error:", err);
+    log.error("Restore version failed", { error: err instanceof Error ? err.message : String(err) });
     throw new APIError("RESTORE_FAILED", "Failed to restore version", 500);
   }
 });
@@ -1082,7 +1085,7 @@ app.get("/api/diagrams/:id/diff", (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
-    console.error("GET /api/diagrams/:id/diff error:", err);
+    log.error("Calculate diff failed", { error: err instanceof Error ? err.message : String(err) });
     throw new APIError("DIFF_FAILED", "Failed to calculate diff", 500);
   }
 });
@@ -1125,7 +1128,7 @@ app.post("/api/diagrams/:id/fork", async (c) => {
       project: forked.project,
     }, getAuditContext(c.req.raw));
 
-    console.log(`[versioning] Forked diagram ${id} -> ${forked.id}`);
+    log.info("Forked diagram", { originalId: id, newId: forked.id });
     return c.json({
       success: true,
       diagram: forked,
@@ -1134,7 +1137,7 @@ app.post("/api/diagrams/:id/fork", async (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     if (err instanceof PermissionDeniedError) throw err;
-    console.error("POST /api/diagrams/:id/fork error:", err);
+    log.error("Fork diagram failed", { error: err instanceof Error ? err.message : String(err) });
     if (err instanceof SyntaxError) {
       throw new APIError("INVALID_JSON", "Invalid JSON in request body", 400);
     }
@@ -1217,7 +1220,7 @@ app.get("/api/diagrams/:id/timeline", (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
-    console.error("GET /api/diagrams/:id/timeline error:", err);
+    log.error("Get timeline failed", { error: err instanceof Error ? err.message : String(err) });
     throw new APIError("TIMELINE_FAILED", "Failed to get timeline", 500);
   }
 });
@@ -1247,7 +1250,7 @@ app.get("/api/agents", async (c) => {
       })),
     });
   } catch (err) {
-    console.error("GET /api/agents error:", err);
+    log.error("Load agents failed", { error: err instanceof Error ? err.message : String(err) });
     throw new APIError("AGENTS_FAILED", "Failed to load agents", 500);
   }
 });
@@ -1304,7 +1307,7 @@ app.get("/api/performance/stats", rateLimiters.admin, (c) => {
       uptime: process.uptime?.() ?? 0,
     });
   } catch (err) {
-    console.error("GET /api/performance/stats error:", err);
+    log.error("Get performance stats failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.STATS_FAILED);
   }
 });
@@ -1315,10 +1318,10 @@ app.post("/api/performance/clear-cache", rateLimiters.admin, (c) => {
     diagramCache.clear();
     listCache.clear();
     svgCache.clear();
-    console.log("[performance] All caches cleared (diagrams, lists, svg)");
+    log.info("All caches cleared", { caches: ["diagrams", "lists", "svg"] });
     return operationResponse(c, true, "All caches cleared");
   } catch (err) {
-    console.error("POST /api/performance/clear-cache error:", err);
+    log.error("Clear cache failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.CACHE_CLEAR_FAILED);
   }
 });
@@ -1363,7 +1366,7 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
       count: entries.length,
     });
   } catch (err) {
-    console.error("GET /api/audit error:", err);
+    log.error("Get audit log failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.AUDIT_FAILED);
   }
 });
@@ -1381,7 +1384,7 @@ app.get("/api/audit/stats", rateLimiters.admin, requireAuth(), (c) => {
     const stats = getAuditStats();
     return c.json(stats);
   } catch (err) {
-    console.error("GET /api/audit/stats error:", err);
+    log.error("Get audit stats failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.AUDIT_STATS_FAILED);
   }
 });
@@ -1394,7 +1397,7 @@ app.get("/api/collab/stats", (c) => {
     const stats = getCollabStats();
     return c.json(stats);
   } catch (err) {
-    console.error("GET /api/collab/stats error:", err);
+    log.error("Get collab stats failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.COLLAB_STATS_FAILED);
   }
 });
@@ -1423,7 +1426,7 @@ app.get("/api/collab/rooms/:diagramId", (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
-    console.error("GET /api/collab/rooms/:diagramId error:", err);
+    log.error("Get room info failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.ROOM_INFO_FAILED);
   }
 });
@@ -1436,7 +1439,7 @@ app.get("/api/diagram-types", (c) => {
     const types = listDiagramTypes();
     return c.json({ types, count: types.length });
   } catch (err) {
-    console.error("GET /api/diagram-types error:", err);
+    log.error("List diagram types failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.LIST_TYPES_FAILED);
   }
 });
@@ -1448,7 +1451,7 @@ app.get("/api/diagram-types/:type", (c) => {
     const info = getDiagramTypeInfo(type);
     return c.json(info);
   } catch (err) {
-    console.error("GET /api/diagram-types/:type error:", err);
+    log.error("Get diagram type info failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.TYPE_INFO_FAILED);
   }
 });
@@ -1460,7 +1463,7 @@ app.get("/api/diagram-types/:type/template", (c) => {
     const template = getDiagramTemplate(type);
     return c.json({ template });
   } catch (err) {
-    console.error("GET /api/diagram-types/:type/template error:", err);
+    log.error("Get diagram template failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.TEMPLATE_FAILED);
   }
 });
@@ -1485,7 +1488,7 @@ app.get("/api/diagrams/:id/export/mermaid", (c) => {
     return c.text(mermaid);
   } catch (err) {
     if (err instanceof APIError) throw err;
-    console.error("GET /api/diagrams/:id/export/mermaid error:", err);
+    log.error("Mermaid export failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.MERMAID_EXPORT_FAILED);
   }
 });
@@ -1496,7 +1499,7 @@ app.get("/api/export-formats", (c) => {
     const formats = getSupportedExportFormats();
     return c.json({ formats, count: formats.length });
   } catch (err) {
-    console.error("GET /api/export-formats error:", err);
+    log.error("Get export formats failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.FORMATS_FAILED);
   }
 });
@@ -1517,7 +1520,7 @@ app.get("/api/llm/status", async (c) => {
       defaultProvider: registry.getDefault()?.type || null,
     });
   } catch (err) {
-    console.error("GET /api/llm/status error:", err);
+    log.error("Get LLM status failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.LLM_STATUS_ERROR);
   }
 });
@@ -1672,7 +1675,7 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
     if (err instanceof TimeoutError) {
       throw new APIError("LAYOUT_TIMEOUT", err.message, 504);
     }
-    console.error("POST /api/diagrams/:id/apply-layout error:", err);
+    log.error("Apply layout failed", { error: err instanceof Error ? err.message : String(err) });
     throw new APIError("LAYOUT_ERROR", "Failed to apply layout", 500);
   }
 });
@@ -1724,7 +1727,7 @@ app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
     if (err instanceof TimeoutError) {
       throw new APIError("LAYOUT_TIMEOUT", err.message, 504);
     }
-    console.error("POST /api/diagrams/:id/preview-layout error:", err);
+    log.error("Preview layout failed", { error: err instanceof Error ? err.message : String(err) });
     throw new APIError("LAYOUT_ERROR", "Failed to preview layout", 500);
   }
 });
@@ -1790,7 +1793,7 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
     });
   } catch (err) {
     if (err instanceof PermissionDeniedError) throw err;
-    console.error("POST /api/diagrams/:id/apply-theme error:", err);
+    log.error("Apply theme failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.THEME_APPLY_FAILED);
   }
 });
@@ -1890,7 +1893,7 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
         },
       }, 504);
     }
-    console.error("POST /api/diagrams/:diagramId/run-agent/:agentId error:", err);
+    log.error("Run agent failed", { error: err instanceof Error ? err.message : String(err) });
     return errorResponse(
       c,
       "AGENT_EXECUTION_ERROR",
@@ -1950,7 +1953,7 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
         { status: err.status, headers: { "Content-Type": "application/json" } }
       );
     }
-    console.error("GET /api/diagrams/:id/export/svg error:", err);
+    log.error("SVG export failed", { error: err instanceof Error ? err.message : String(err) });
     return new Response(
       JSON.stringify({ error: { code: "EXPORT_FAILED", message: "Failed to export SVG" } }),
       { status: 500, headers: { "Content-Type": "application/json" } }
@@ -2119,7 +2122,7 @@ onShutdown("close-websockets", () => {
 });
 
 onShutdown("flush-metrics", () => {
-  console.log("[shutdown] Metrics flushed");
+  log.info("Metrics flushed");
 });
 
 const mimeTypes: Record<string, string> = {
@@ -2182,9 +2185,11 @@ Bun.serve({
   },
 });
 
-console.log(`[vizcraft] Web UI: http://localhost:${PORT}`);
-console.log(`[vizcraft] API: http://localhost:${PORT}/api`);
-console.log(`[vizcraft] WebSocket: ws://localhost:${PORT}/ws/collab`);
+log.info("Server started", {
+  webUI: `http://localhost:${PORT}`,
+  api: `http://localhost:${PORT}/api`,
+  websocket: `ws://localhost:${PORT}/ws/collab`,
+});
 
 // Initialize thumbnail cleanup
 // This requires access to the storage module to get diagram IDs

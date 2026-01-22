@@ -11,6 +11,9 @@ import type { Context, Next } from "hono";
 import { z } from "zod";
 import { protectedStorage as storage } from "../storage/protected-storage";
 import type { Diagram } from "../types";
+import { createLogger } from "../logging";
+
+const log = createLogger("api");
 
 // ==================== Error Class ====================
 
@@ -167,7 +170,7 @@ export function requireVersion(diagramId: string, version: number) {
  * Error handling middleware
  */
 export function errorHandler(err: Error, c: Context) {
-  console.error(`[API Error] ${c.req.method} ${c.req.path}:`, err);
+  log.error("API error", { method: c.req.method, path: c.req.path, error: err.message });
 
   if (err instanceof APIError) {
     return c.json(

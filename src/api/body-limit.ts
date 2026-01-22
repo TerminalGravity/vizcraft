@@ -6,6 +6,9 @@
  */
 
 import type { Context, Next } from "hono";
+import { createLogger } from "../logging";
+
+const log = createLogger("body-limit");
 
 export interface BodyLimitConfig {
   /** Maximum body size in bytes */
@@ -108,9 +111,7 @@ export function bodyLimit(
       if (contentType.includes("application/json")) {
         const body = await c.req.text();
         if (body.length > maxSize) {
-          console.warn(
-            `[body-limit:${name}] Body size ${body.length} exceeds limit ${maxSize}`
-          );
+          log.warn("Body size exceeds limit", { name, bodySize: body.length, maxSize });
           throw new BodyTooLargeError(maxSize, body.length);
         }
 

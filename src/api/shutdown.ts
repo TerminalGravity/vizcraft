@@ -8,6 +8,9 @@
  */
 
 import type { Context, Next } from "hono";
+import { createLogger } from "../logging";
+
+const log = createLogger("shutdown");
 
 // Shutdown state
 let isShuttingDown = false;
@@ -71,15 +74,11 @@ async function drainRequests(): Promise<{ drained: boolean; remaining: number }>
   while (activeRequests.size > 0) {
     const elapsed = Date.now() - startTime;
     if (elapsed >= SHUTDOWN_TIMEOUT_MS) {
-      console.log(
-        `[shutdown] Drain timeout reached, ${activeRequests.size} requests still active`
-      );
+      log.warn("Drain timeout reached", { remaining: activeRequests.size });
       return { drained: false, remaining: activeRequests.size };
     }
 
-    console.log(
-      `[shutdown] Waiting for ${activeRequests.size} requests to complete...`
-    );
+    log.info("Waiting for requests to complete", { active: activeRequests.size });
     await new Promise((resolve) => setTimeout(resolve, DRAIN_INTERVAL_MS));
   }
 
@@ -111,38 +110,36 @@ export async function gracefulShutdown(signal: string): Promise<void> {
   isShuttingDown = true;
 
   shutdownPromise = (async () => {
-    console.log(`\n[shutdown] Received ${signal}, starting graceful shutdown...`);
+    log.info("Starting graceful shutdown", { signal });
     const startTime = Date.now();
 
     // Phase 1: Stop accepting new requests (done via middleware)
-    console.log("[shutdown] Phase 1: Stopped accepting new requests");
+    log.info("Phase 1: Stopped accepting new requests");
 
     // Phase 2: Drain in-flight requests
-    console.log("[shutdown] Phase 2: Draining in-flight requests...");
+    log.info("Phase 2: Draining in-flight requests");
     const drainResult = await drainRequests();
 
     if (drainResult.drained) {
-      console.log("[shutdown] All requests completed");
+      log.info("All requests completed");
     } else {
-      console.log(
-        `[shutdown] WARNING: ${drainResult.remaining} requests still active after timeout`
-      );
+      log.warn("Requests still active after timeout", { remaining: drainResult.remaining });
     }
 
     // Phase 3: Run shutdown callbacks
-    console.log(`[shutdown] Phase 3: Running ${shutdownCallbacks.length} cleanup callbacks...`);
+    log.info("Phase 3: Running cleanup callbacks", { count: shutdownCallbacks.length });
     for (const { name, callback } of shutdownCallbacks) {
       try {
-        console.log(`[shutdown] Running: ${name}`);
+        log.info("Running callback", { name });
         await callback();
       } catch (err) {
-        console.error(`[shutdown] Error in ${name}:`, err);
+        log.error("Callback error", { name, error: err instanceof Error ? err.message : String(err) });
       }
     }
 
     // Calculate total shutdown time
     const totalTime = Date.now() - startTime;
-    console.log(`[shutdown] Graceful shutdown completed in ${totalTime}ms`);
+    log.info("Graceful shutdown completed", { durationMs: totalTime });
 
     // Exit with appropriate code
     const exitCode = drainResult.drained ? 0 : 1;
@@ -168,17 +165,17 @@ export function installShutdownHandlers(): void {
 
   // Handle uncaught exceptions
   process.on("uncaughtException", (err) => {
-    console.error("[shutdown] Uncaught exception:", err);
+    log.error("Uncaught exception", { error: err instanceof Error ? err.message : String(err) });
     gracefulShutdown("uncaughtException");
   });
 
   // Handle unhandled promise rejections
-  process.on("unhandledRejection", (reason, promise) => {
-    console.error("[shutdown] Unhandled rejection at:", promise, "reason:", reason);
+  process.on("unhandledRejection", (reason, _promise) => {
+    log.error("Unhandled rejection", { reason: reason instanceof Error ? reason.message : String(reason) });
     // Don't shutdown on unhandled rejection, just log it
   });
 
-  console.log("[shutdown] Graceful shutdown handlers installed");
+  log.info("Graceful shutdown handlers installed");
 }
 
 /**

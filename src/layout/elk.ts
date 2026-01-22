@@ -20,6 +20,9 @@ import {
   DEFAULT_SPACING,
   DEFAULT_PADDING,
 } from "./types";
+import { createLogger } from "../logging";
+
+const log = createLogger("layout");
 
 // Map our direction to ELK direction
 function mapDirection(dir?: LayoutDirection): string {
@@ -104,7 +107,11 @@ export async function elkLayout(
     const processedPositions = postProcessLayout(positions, graph, options);
 
     const duration = performance.now() - startTime;
-    console.log(`[layout] ELK-style ${options.algorithm} (dagre backend) completed in ${duration.toFixed(2)}ms`);
+    log.info("ELK-style layout completed", {
+      algorithm: options.algorithm,
+      backend: "dagre",
+      durationMs: duration.toFixed(2),
+    });
 
     return {
       success: true,
@@ -112,7 +119,7 @@ export async function elkLayout(
       duration,
     };
   } catch (err) {
-    console.error("[layout] ELK-style layout failed:", err);
+    log.error("ELK-style layout failed", { error: err instanceof Error ? err.message : String(err) });
     return {
       success: false,
       positions: {},

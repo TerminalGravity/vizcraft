@@ -7,6 +7,9 @@ import type { LLMProvider, LLMProviderRegistry, LLMProviderType, LLMProviderConf
 import { createAnthropicProvider } from "./providers/anthropic";
 import { createOpenAIProvider } from "./providers/openai";
 import { createOllamaProvider } from "./providers/ollama";
+import { createLogger } from "../logging";
+
+const log = createLogger("llm");
 
 // Provider priority order (Anthropic first-class citizen)
 const PROVIDER_PRIORITY: LLMProviderType[] = ["anthropic", "openai", "ollama"];
@@ -35,13 +38,13 @@ class Registry implements LLMProviderRegistry {
       const provider = this.providers.get(type);
       if (provider?.isConfigured) {
         this.defaultProvider = type;
-        console.error(`[llm] Default provider: ${provider.name}`);
+        log.info("Default provider set", { provider: provider.name });
         break;
       }
     }
 
     if (!this.defaultProvider) {
-      console.error("[llm] Warning: No LLM provider configured. Set ANTHROPIC_API_KEY for best experience.");
+      log.warn("No LLM provider configured. Set ANTHROPIC_API_KEY for best experience.");
     }
   }
 
@@ -74,7 +77,7 @@ class Registry implements LLMProviderRegistry {
 
       if (newPriority < currentPriority) {
         this.defaultProvider = provider.type;
-        console.error(`[llm] Updated default provider: ${provider.name}`);
+        log.info("Updated default provider", { provider: provider.name });
       }
     }
   }

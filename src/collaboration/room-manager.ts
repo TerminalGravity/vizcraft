@@ -8,6 +8,9 @@
 import { nanoid } from "nanoid";
 import type { Room, Participant, RoomState, ServerMessage, DiagramChange } from "./types";
 import { COLLAB_CONFIG, validateDiagramChanges } from "./types";
+import { createLogger } from "../logging";
+
+const log = createLogger("collab");
 
 // WebSocket connection type with optional user info
 type WebSocketConnection = {
@@ -77,7 +80,7 @@ class RoomManager {
     }, COLLAB_CONFIG.PING_INTERVAL_MS);
 
     const authStatus = userId ? `authenticated as ${userId}` : "anonymous";
-    console.log(`[collab] Connection registered: ${state.participantId} (${authStatus})`);
+    log.debug("Connection registered", { participantId: state.participantId, authStatus });
   }
 
   /**
@@ -98,7 +101,7 @@ class RoomManager {
     }
 
     this.connections.delete(ws);
-    console.log(`[collab] Connection closed: ${state.participantId}`);
+    log.debug("Connection closed", { participantId: state.participantId });
   }
 
   /**
@@ -126,7 +129,7 @@ class RoomManager {
         createdAt: Date.now(),
       };
       this.rooms.set(diagramId, room);
-      console.log(`[collab] Room created: ${diagramId}`);
+      log.debug("Room created", { diagramId });
     }
 
     // Check max participants
@@ -162,7 +165,7 @@ class RoomManager {
       participant,
     }, ws);
 
-    console.log(`[collab] ${participant.name} joined room ${diagramId} (${room.participants.size} participants)`);
+    log.info("Participant joined room", { name: participant.name, diagramId, participantCount: room.participants.size });
   }
 
   /**
@@ -184,12 +187,12 @@ class RoomManager {
       participantId: state.participantId,
     }, ws);
 
-    console.log(`[collab] ${state.participantId} left room ${state.diagramId} (${room.participants.size} remaining)`);
+    log.info("Participant left room", { participantId: state.participantId, diagramId: state.diagramId, remainingParticipants: room.participants.size });
 
     // Clean up empty rooms
     if (room.participants.size === 0) {
       this.rooms.delete(state.diagramId);
-      console.log(`[collab] Room ${state.diagramId} closed (empty)`);
+      log.debug("Room closed (empty)", { diagramId: state.diagramId });
     }
 
     state.diagramId = null;
@@ -271,9 +274,7 @@ class RoomManager {
         message: `Invalid change data: ${validation.error}`,
         code: "INVALID_CHANGE_DATA",
       });
-      console.warn(
-        `[collab] Rejected invalid changes from ${state.participantId}: ${validation.error}`
-      );
+      log.warn("Rejected invalid changes", { participantId: state.participantId, error: validation.error });
       return false;
     }
 
@@ -322,7 +323,7 @@ class RoomManager {
       version: room.version,
     });
 
-    console.log(`[collab] Sync broadcast to room ${diagramId} (v${room.version})`);
+    log.debug("Sync broadcast to room", { diagramId, version: room.version });
   }
 
   /**
@@ -433,18 +434,20 @@ class RoomManager {
     for (const ws of staleConnections) {
       const state = this.connections.get(ws);
       if (state) {
-        console.log(
-          `[collab] Cleaning up stale connection: ${state.participantId} (age: ${now - state.lastActivity}ms)`
-        );
+        log.debug("Cleaning up stale connection", {
+          participantId: state.participantId,
+          ageMs: now - state.lastActivity,
+        });
       }
       this.handleDisconnect(ws);
       cleanedConnections++;
     }
 
     if (cleanedParticipants > 0 || cleanedConnections > 0) {
-      console.log(
-        `[collab] Cleanup: ${cleanedParticipants} inactive participants, ${cleanedConnections} stale connections`
-      );
+      log.info("Cleanup completed", {
+        inactiveParticipants: cleanedParticipants,
+        staleConnections: cleanedConnections,
+      });
     }
 
     return { participants: cleanedParticipants, connections: cleanedConnections };
@@ -485,7 +488,7 @@ class RoomManager {
 
       if (state.rateLimit.warnings >= RATE_LIMIT.MAX_WARNINGS) {
         // Too many warnings, disconnect
-        console.warn(`[collab] Rate limit exceeded, disconnecting: ${state.participantId}`);
+        log.warn("Rate limit exceeded, disconnecting", { participantId: state.participantId });
         this.send(ws, {
           type: "error",
           message: "Rate limit exceeded - disconnected",
@@ -571,7 +574,7 @@ class RoomManager {
     this.rooms.clear();
     this.connections.clear();
 
-    console.log(`[collab] Closed ${closed} WebSocket connections`);
+    log.info("Closed WebSocket connections", { count: closed });
     return closed;
   }
 
@@ -618,10 +621,7 @@ function startCleanupInterval(): void {
       roomManager.cleanupInactive();
     } catch (err) {
       // Log error but don't crash - cleanup is best-effort
-      console.error(
-        "[collab] Cleanup failed:",
-        err instanceof Error ? err.message : err
-      );
+      log.error("Cleanup failed", { error: err instanceof Error ? err.message : String(err) });
     }
   }, COLLAB_CONFIG.PRESENCE_TIMEOUT_MS / 2);
 
@@ -630,7 +630,7 @@ function startCleanupInterval(): void {
     cleanupIntervalId.unref();
   }
 
-  console.log("[collab] Cleanup interval started");
+  log.info("Cleanup interval started");
 }
 
 /**
@@ -640,7 +640,7 @@ export function stopCollabCleanup(): void {
   if (cleanupIntervalId !== null) {
     clearInterval(cleanupIntervalId);
     cleanupIntervalId = null;
-    console.log("[collab] Cleanup interval stopped");
+    log.info("Cleanup interval stopped");
   }
 }
 

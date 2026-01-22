@@ -8,6 +8,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, Next } from "hono";
 import { nanoid } from "nanoid";
+import { createLogger } from "../logging";
+
+const log = createLogger("request");
 
 export interface RequestContext {
   /** Unique request identifier */
@@ -167,24 +170,27 @@ export function formatLogMessage(
 
 /**
  * Context-aware logger
+ * Uses structured logging with request context
  */
 export const ctxLogger = {
   info(message: string, extra?: Record<string, unknown>): void {
-    console.log(formatLogMessage("info", message, extra));
+    const ctx = getRequestContext();
+    log.info(message, { ...extra, requestId: ctx?.requestId, path: ctx?.path });
   },
 
   warn(message: string, extra?: Record<string, unknown>): void {
-    console.warn(formatLogMessage("warn", message, extra));
+    const ctx = getRequestContext();
+    log.warn(message, { ...extra, requestId: ctx?.requestId, path: ctx?.path });
   },
 
   error(message: string, extra?: Record<string, unknown>): void {
-    console.error(formatLogMessage("error", message, extra));
+    const ctx = getRequestContext();
+    log.error(message, { ...extra, requestId: ctx?.requestId, path: ctx?.path });
   },
 
   debug(message: string, extra?: Record<string, unknown>): void {
-    if (process.env.DEBUG || process.env.NODE_ENV === "development") {
-      console.debug(formatLogMessage("debug", message, extra));
-    }
+    const ctx = getRequestContext();
+    log.debug(message, { ...extra, requestId: ctx?.requestId, path: ctx?.path });
   },
 };
 

@@ -13,6 +13,9 @@
 
 import { Database } from "bun:sqlite";
 import type { AuditEntry, AuditAction } from "./index";
+import { createLogger } from "../logging";
+
+const log = createLogger("audit-persistence");
 
 // ==================== Configuration ====================
 
@@ -145,7 +148,7 @@ export function initAuditPersistence(): void {
   flushTimer = setInterval(flushPendingWrites, AUDIT_CONFIG.FLUSH_INTERVAL_MS);
 
   initialized = true;
-  console.log(`[audit] Persistence initialized, loaded ${memoryCache.length} entries from database`);
+  log.info("Persistence initialized", { loadedEntries: memoryCache.length });
 }
 
 /**
@@ -199,7 +202,7 @@ export function flushPendingWrites(): number {
     db.run("ROLLBACK");
     // Re-queue failed writes
     pendingWrites.unshift(...toWrite);
-    console.error("[audit] Failed to flush entries:", error);
+    log.error("Failed to flush entries", { error: error instanceof Error ? error.message : String(error) });
     return 0;
   }
 
@@ -237,12 +240,12 @@ export function cleanupOldEntries(): number {
     const deleted = countBefore - countAfter;
 
     if (deleted > 0) {
-      console.log(`[audit] Cleaned up ${deleted} entries older than ${AUDIT_CONFIG.RETENTION_DAYS} days`);
+      log.info("Cleaned up old entries", { deleted, retentionDays: AUDIT_CONFIG.RETENTION_DAYS });
     }
 
     return deleted;
   } catch (error) {
-    console.error("[audit] Failed to cleanup old entries:", error);
+    log.error("Failed to cleanup old entries", { error: error instanceof Error ? error.message : String(error) });
     return 0;
   }
 }
@@ -363,7 +366,7 @@ export function shutdownAuditPersistence(): void {
     flushPendingWrites();
   }
 
-  console.log("[audit] Persistence shutdown complete");
+  log.info("Persistence shutdown complete");
 }
 
 /**

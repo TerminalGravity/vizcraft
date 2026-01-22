@@ -6,6 +6,9 @@
  */
 
 import { z } from "zod";
+import { createLogger } from "../logging";
+
+const log = createLogger("validation");
 
 // ==================== Constants ====================
 
@@ -417,7 +420,7 @@ export function safeParseSpec(json: string, context?: string): SafeParseSpecResu
     // Return empty spec as fallback
     const errorMsg = err instanceof Error ? err.message : "Unknown JSON parse error";
     if (context) {
-      console.error(`[validation] JSON parse failed for ${context}: ${errorMsg}`);
+      log.error("JSON parse failed", { context, error: errorMsg });
     }
     const fallbackSpec: DiagramSpec = {
       type: "freeform",
@@ -447,9 +450,11 @@ export function safeParseSpec(json: string, context?: string): SafeParseSpecResu
   });
 
   if (context) {
-    console.warn(
-      `[validation] Invalid spec for ${context}: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` (+${errors.length - 3} more)` : ""}`
-    );
+    log.warn("Invalid spec", {
+      context,
+      errors: errors.slice(0, 3).join("; "),
+      additionalErrors: errors.length > 3 ? errors.length - 3 : 0,
+    });
   }
 
   // Return the raw parsed data as DiagramSpec (type assertion)

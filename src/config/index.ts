@@ -10,6 +10,9 @@
  */
 
 import { z } from "zod";
+import { createLogger } from "../logging";
+
+const log = createLogger("config");
 
 /**
  * Environment variable schema with validation
@@ -83,10 +86,9 @@ function loadConfig() {
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
-    console.error("[config] Invalid configuration:");
-    for (const issue of result.error.issues) {
-      console.error(`  - ${issue.path.join(".")}: ${issue.message}`);
-    }
+    log.error("Invalid configuration", {
+      issues: result.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+    });
     throw new ConfigurationError(
       `Invalid configuration: ${result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ")}`
     );
@@ -220,11 +222,12 @@ export class ConfigurationError extends Error {
 export function validateConfig(): void {
   // Config is already validated during loadConfig()
   // This function exists for explicit validation calls
-  console.log("[config] Configuration validated successfully");
-  console.log(`[config] Environment: ${config.env}`);
-  console.log(`[config] Data directory: ${config.data.dir}`);
-  console.log(`[config] MCP server port: ${config.server.port}`);
-  console.log(`[config] Web server port: ${config.web.port}`);
+  log.info("Configuration validated", {
+    environment: config.env,
+    dataDir: config.data.dir,
+    mcpPort: config.server.port,
+    webPort: config.web.port,
+  });
 }
 
 /**

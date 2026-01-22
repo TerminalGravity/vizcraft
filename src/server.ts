@@ -11,6 +11,9 @@ import { nanoid } from "nanoid";
 import { protectedStorage as storage } from "./storage/protected-storage";
 import type { DiagramSpec, DiagramChange } from "./types";
 import { sanitizeFilename, createSafeExportPath, validateExportPath } from "./utils/path-safety";
+import { createLogger } from "./logging";
+
+const log = createLogger("mcp");
 
 const PORT = parseInt(process.env.PORT || "8420");
 const WEB_URL = process.env.WEB_URL || `http://localhost:3420`;
@@ -75,7 +78,7 @@ function withErrorBoundary<TArgs, TResult extends MCPToolResult>(
       const duration = Date.now() - startTime;
       const errorMessage = err instanceof Error ? err.message : String(err);
 
-      console.error(`[mcp] Tool "${toolName}" failed after ${duration}ms:`, err);
+      log.error("Tool failed", { toolName, durationMs: duration, error: errorMessage });
 
       // Provide helpful suggestions based on error type
       let suggestion: string | undefined;
@@ -600,17 +603,18 @@ View/Edit: ${WEB_URL}/diagram/${id}
 
 // Start server
 async function main() {
-  console.error(`[vizcraft] Starting MCP server...`);
-  console.error(`[vizcraft] Data directory: ${process.env.DATA_DIR || "./data"}`);
-  console.error(`[vizcraft] Web URL: ${WEB_URL}`);
+  log.info("Starting MCP server", {
+    dataDir: process.env.DATA_DIR || "./data",
+    webUrl: WEB_URL,
+  });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error(`[vizcraft] MCP server running on stdio`);
+  log.info("MCP server running on stdio");
 }
 
 main().catch((err) => {
-  console.error("[vizcraft] Fatal error:", err);
+  log.error("Fatal error", { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });

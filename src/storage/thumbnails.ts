@@ -14,6 +14,9 @@
 import { join } from "path";
 import { existsSync, mkdirSync, unlinkSync } from "fs";
 import { validateDataUrl, isValidDataUrl, InvalidDataUrlError } from "../utils/path-safety";
+import { createLogger } from "../logging";
+
+const log = createLogger("thumbnails");
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || "./data";
@@ -38,16 +41,14 @@ export function dataUrlToBuffer(dataUrl: string): Buffer | null {
 
     // Additional check: only allow image types for thumbnails
     if (!THUMBNAIL_MIME_TYPES.has(validated.mimeType)) {
-      console.error(
-        `[thumbnails] Rejected non-image MIME type: ${validated.mimeType}`
-      );
+      log.error("Rejected non-image MIME type", { mimeType: validated.mimeType });
       return null;
     }
 
     return Buffer.from(validated.data, "base64");
   } catch (err) {
     if (err instanceof InvalidDataUrlError) {
-      console.error(`[thumbnails] Invalid data URL: ${err.message}`);
+      log.error("Invalid data URL", { error: err.message });
     }
     return null;
   }
@@ -82,17 +83,17 @@ export async function saveThumbnail(
   try {
     const buffer = dataUrlToBuffer(dataUrl);
     if (!buffer) {
-      console.error(`[thumbnails] Invalid data URL for diagram ${diagramId}`);
+      log.error("Invalid data URL for diagram", { diagramId });
       return false;
     }
 
     const path = getThumbnailPath(diagramId);
     await Bun.write(path, buffer);
 
-    console.log(`[thumbnails] Saved thumbnail for ${diagramId} (${buffer.length} bytes)`);
+    log.debug("Saved thumbnail", { diagramId, bytes: buffer.length });
     return true;
   } catch (err) {
-    console.error(`[thumbnails] Failed to save thumbnail for ${diagramId}:`, err);
+    log.error("Failed to save thumbnail", { diagramId, error: err instanceof Error ? err.message : String(err) });
     return false;
   }
 }
@@ -114,7 +115,7 @@ export async function loadThumbnail(diagramId: string): Promise<string | null> {
     const buffer = Buffer.from(await file.arrayBuffer());
     return bufferToDataUrl(buffer);
   } catch (err) {
-    console.error(`[thumbnails] Failed to load thumbnail for ${diagramId}:`, err);
+    log.error("Failed to load thumbnail", { diagramId, error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }
@@ -137,13 +138,13 @@ export async function deleteThumbnail(diagramId: string): Promise<boolean> {
 
     if (existsSync(path)) {
       unlinkSync(path);
-      console.log(`[thumbnails] Deleted thumbnail for ${diagramId}`);
+      log.debug("Deleted thumbnail", { diagramId });
       return true;
     }
 
     return false;
   } catch (err) {
-    console.error(`[thumbnails] Failed to delete thumbnail for ${diagramId}:`, err);
+    log.error("Failed to delete thumbnail", { diagramId, error: err instanceof Error ? err.message : String(err) });
     return false;
   }
 }
@@ -247,9 +248,7 @@ export async function cleanupOrphans(
   }
 
   if (deleted > 0 || skippedTooNew > 0) {
-    console.log(
-      `[thumbnails] Cleanup: ${deleted} deleted, ${skippedTooNew} skipped (too new)`
-    );
+    log.info("Cleanup completed", { deleted, skippedTooNew });
   }
 
   return deleted;
@@ -279,7 +278,7 @@ let getDiagramIdsFn: GetDiagramIdsFn | null = null;
  */
 export function setDiagramIdProvider(fn: GetDiagramIdsFn): void {
   getDiagramIdsFn = fn;
-  console.log("[thumbnails] Diagram ID provider registered");
+  log.info("Diagram ID provider registered");
 }
 
 /**
@@ -288,7 +287,7 @@ export function setDiagramIdProvider(fn: GetDiagramIdsFn): void {
  */
 async function performScheduledCleanup(): Promise<void> {
   if (!getDiagramIdsFn) {
-    console.warn("[thumbnails] Scheduled cleanup skipped: no diagram ID provider");
+    log.warn("Scheduled cleanup skipped: no diagram ID provider");
     return;
   }
 
@@ -303,16 +302,11 @@ async function performScheduledCleanup(): Promise<void> {
     lastCleanupStats = { deleted, duration };
 
     if (deleted > 0) {
-      console.log(
-        `[thumbnails] Scheduled cleanup: ${deleted} orphans deleted in ${duration}ms`
-      );
+      log.info("Scheduled cleanup completed", { deleted, durationMs: duration });
     }
   } catch (err) {
     // Log error but don't crash - cleanup is best-effort
-    console.error(
-      "[thumbnails] Scheduled cleanup failed:",
-      err instanceof Error ? err.message : err
-    );
+    log.error("Scheduled cleanup failed", { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -324,7 +318,7 @@ export function startThumbnailCleanup(): void {
 
   cleanupIntervalId = setInterval(() => {
     performScheduledCleanup().catch((err) => {
-      console.error("[thumbnails] Unhandled cleanup error:", err);
+      log.error("Unhandled cleanup error", { error: err instanceof Error ? err.message : String(err) });
     });
   }, CLEANUP_INTERVAL_MS);
 
@@ -333,15 +327,13 @@ export function startThumbnailCleanup(): void {
     cleanupIntervalId.unref();
   }
 
-  console.log(
-    `[thumbnails] Cleanup interval started (every ${CLEANUP_INTERVAL_MS / 60000} minutes)`
-  );
+  log.info("Cleanup interval started", { intervalMinutes: CLEANUP_INTERVAL_MS / 60000 });
 
   // Run initial cleanup after a short delay (30 seconds)
   // This catches orphans from previous sessions
   setTimeout(() => {
     performScheduledCleanup().catch((err) => {
-      console.error("[thumbnails] Initial cleanup error:", err);
+      log.error("Initial cleanup error", { error: err instanceof Error ? err.message : String(err) });
     });
   }, 30_000);
 }
@@ -353,7 +345,7 @@ export function stopThumbnailCleanup(): void {
   if (cleanupIntervalId !== null) {
     clearInterval(cleanupIntervalId);
     cleanupIntervalId = null;
-    console.log("[thumbnails] Cleanup interval stopped");
+    log.info("Cleanup interval stopped");
   }
 }
 

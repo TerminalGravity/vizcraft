@@ -10,6 +10,9 @@
  */
 
 import { CircuitBreaker, CircuitBreakerError } from "./circuit-breaker";
+import { createLogger } from "../logging";
+
+const log = createLogger("retry");
 
 export interface RetryConfig {
   /** Maximum number of retry attempts (default: 3) */
@@ -105,19 +108,19 @@ export async function withRetry<T>(
 
       // Check if this is a circuit breaker error (don't retry)
       if (error instanceof CircuitBreakerError) {
-        console.error(`${logPrefix} Circuit breaker open, not retrying`);
+        log.error("Circuit breaker open, not retrying", { name });
         throw error;
       }
 
       // Check if we've exhausted retries
       if (attempt >= maxRetries) {
-        console.error(`${logPrefix} All ${maxRetries + 1} attempts failed`);
+        log.error("All retry attempts failed", { name, totalAttempts: maxRetries + 1 });
         break;
       }
 
       // Check if error is retryable
       if (isRetryable && !isRetryable(error)) {
-        console.error(`${logPrefix} Error is not retryable:`, err.message);
+        log.error("Error is not retryable", { name, error: err.message });
         throw err;
       }
 
@@ -139,10 +142,12 @@ export async function withRetry<T>(
       totalDelayMs += delayMs;
 
       // Log retry
-      console.log(
-        `${logPrefix} Attempt ${attempt + 1} failed, retrying in ${delayMs}ms:`,
-        err.message
-      );
+      log.info("Attempt failed, retrying", {
+        name,
+        attempt: attempt + 1,
+        delayMs,
+        error: err.message,
+      });
 
       // Call retry callback if provided
       if (onRetry) {

@@ -6,6 +6,9 @@
  */
 
 import type { Context, Next } from "hono";
+import { createLogger } from "../logging";
+
+const log = createLogger("rate-limiter");
 
 // Rate limit configuration
 export interface RateLimitConfig {
@@ -92,9 +95,10 @@ function performCleanup(): void {
 
     // Emergency cleanup if store is too large
     if (rateLimitStore.size > MAX_STORE_SIZE) {
-      console.warn(
-        `[rate-limiter] Store size ${rateLimitStore.size} exceeds max ${MAX_STORE_SIZE}, performing emergency cleanup`
-      );
+      log.warn("Store size exceeds maximum, performing emergency cleanup", {
+        currentSize: rateLimitStore.size,
+        maxSize: MAX_STORE_SIZE,
+      });
       // Delete oldest 20% of entries
       const entries = Array.from(rateLimitStore.entries())
         .sort((a, b) => a[1].windowStart - b[1].windowStart);
@@ -111,11 +115,11 @@ function performCleanup(): void {
     lastCleanupTime = now;
 
     if (deleted > 0) {
-      console.log(`[rate-limiter] Cleaned up ${deleted} stale entries, ${rateLimitStore.size} remaining`);
+      log.info("Cleaned up stale entries", { deleted, remaining: rateLimitStore.size });
     }
   } catch (err) {
     // Log error but don't crash - cleanup is best-effort
-    console.error("[rate-limiter] Cleanup failed:", err instanceof Error ? err.message : err);
+    log.error("Cleanup failed", { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -129,13 +133,13 @@ function ensureCleanupRunning(): void {
     if (typeof cleanupIntervalId === "object" && "unref" in cleanupIntervalId) {
       cleanupIntervalId.unref();
     }
-    console.log("[rate-limiter] Cleanup interval started");
+    log.info("Cleanup interval started");
   }
 
   // Check if cleanup has been running - restart if stale
   const timeSinceLastCleanup = Date.now() - lastCleanupTime;
   if (timeSinceLastCleanup > CLEANUP_INTERVAL * 3) {
-    console.warn("[rate-limiter] Cleanup appears stale, forcing cleanup now");
+    log.warn("Cleanup appears stale, forcing cleanup now", { timeSinceLastCleanupMs: timeSinceLastCleanup });
     performCleanup();
   }
 }
@@ -288,7 +292,7 @@ export function stopRateLimitCleanup(): void {
   if (cleanupIntervalId !== null) {
     clearInterval(cleanupIntervalId);
     cleanupIntervalId = null;
-    console.log("[rate-limiter] Cleanup interval stopped");
+    log.info("Cleanup interval stopped");
   }
 }
 

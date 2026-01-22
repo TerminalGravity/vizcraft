@@ -428,7 +428,8 @@ describe("Audit Logging", () => {
 
         expect(loggedMessage).toBeDefined();
         const parsed = JSON.parse(loggedMessage!);
-        expect(parsed.level).toBe("audit");
+        expect(parsed.level).toBe("info");
+        expect(parsed.message).toBe("audit_event");
         expect(parsed.action).toBe("diagram.create");
         expect(parsed.userId).toBe("test-user-123");
         expect(parsed.resourceId).toBe("d-1");

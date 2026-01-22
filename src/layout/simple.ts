@@ -10,6 +10,9 @@ import {
   DEFAULT_SPACING,
   DEFAULT_PADDING,
 } from "./types";
+import { createLogger } from "../logging";
+
+const log = createLogger("layout");
 
 /**
  * Grid Layout
@@ -44,7 +47,7 @@ export function gridLayout(
     });
 
     const duration = performance.now() - startTime;
-    console.log(`[layout] Grid completed in ${duration.toFixed(2)}ms`);
+    log.info("Grid layout completed", { durationMs: duration.toFixed(2) });
 
     return {
       success: true,
@@ -99,7 +102,7 @@ export function circularLayout(
     });
 
     const duration = performance.now() - startTime;
-    console.log(`[layout] Circular completed in ${duration.toFixed(2)}ms`);
+    log.info("Circular layout completed", { durationMs: duration.toFixed(2) });
 
     return {
       success: true,

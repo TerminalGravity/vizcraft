@@ -9,6 +9,9 @@
  */
 
 import type { UserContext } from "../auth";
+import { createLogger } from "../logging";
+
+const log = createLogger("audit");
 
 /**
  * Valid audit actions as a const array for runtime validation
@@ -85,13 +88,8 @@ export function audit(
     userAgent: context?.userAgent,
   };
 
-  // Log to console in structured format
-  console.log(
-    JSON.stringify({
-      level: "audit",
-      ...entry,
-    })
-  );
+  // Log using structured logger
+  log.info("audit_event", entry);
 
   // Queue for persistence (async batch write to SQLite)
   queueAuditEntry(entry);

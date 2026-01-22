@@ -20,6 +20,9 @@ import type {
 } from "../types";
 import { DiagramTransformOutputSchema } from "../types";
 import type { DiagramSpec } from "../../types";
+import { createLogger } from "../../logging";
+
+const log = createLogger("openai");
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -217,7 +220,7 @@ export class OpenAIProvider implements LLMProvider {
         try {
           parsedArgs = JSON.parse(toolCall.function.arguments);
         } catch (parseError) {
-          console.error("[openai] Failed to parse function arguments:", toolCall.function.arguments);
+          log.error("Failed to parse function arguments", { args: toolCall.function.arguments });
           if (attempt < maxRetries) {
             await this.delay(Math.pow(2, attempt) * 500);
             continue;
@@ -232,7 +235,7 @@ export class OpenAIProvider implements LLMProvider {
         const parseResult = DiagramTransformOutputSchema.safeParse(parsedArgs);
 
         if (!parseResult.success) {
-          console.error("[openai] Invalid tool output:", parseResult.error.message);
+          log.error("Invalid tool output", { error: parseResult.error.message });
           if (attempt < maxRetries) {
             await this.delay(Math.pow(2, attempt) * 500);
             continue;
@@ -280,7 +283,7 @@ export class OpenAIProvider implements LLMProvider {
         };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        console.error(`[openai] Attempt ${attempt + 1} failed:`, lastError.message);
+        log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
         // Check for rate limiting
         if (lastError.message.includes("429") || lastError.message.includes("rate limit")) {

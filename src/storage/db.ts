@@ -9,6 +9,9 @@ import { Database } from "bun:sqlite";
 import { nanoid } from "nanoid";
 import type { Diagram, DiagramSpec, DiagramVersion } from "../types";
 import { safeParseSpec, VALID_DIAGRAM_TYPES } from "../validation/schemas";
+import { createLogger } from "../logging";
+
+const log = createLogger("db");
 import {
   validateSpecQuotas,
   checkUserDiagramQuota,
@@ -93,7 +96,7 @@ function migrateAddColumn(
     : "";
 
   db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}${defaultClause}`);
-  console.log(`[db] Added ${column} column to ${table} table`);
+  log.info("Added column to table", { column, table });
   return true;
 }
 
@@ -209,14 +212,14 @@ try {
   const diagramCount = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM diagrams").get();
 
   if (ftsCount && diagramCount && ftsCount.count < diagramCount.count) {
-    console.log("[db] Rebuilding FTS index for existing diagrams...");
+    log.info("Rebuilding FTS index for existing diagrams");
     // Clear and rebuild FTS content
     db.run("INSERT INTO diagrams_fts(diagrams_fts) VALUES('rebuild')");
-    console.log("[db] FTS index rebuilt successfully");
+    log.info("FTS index rebuilt successfully");
   }
 } catch (err) {
   // FTS rebuild failed, log but don't crash - search will fall back to LIKE
-  console.warn("[db] FTS index rebuild failed:", err instanceof Error ? err.message : err);
+  log.warn("FTS index rebuild failed", { error: err instanceof Error ? err.message : String(err) });
 }
 
 // =============================================================================
@@ -520,16 +523,18 @@ export const storage = {
       // Conflict - retry with fresh data
       // Log conflict in development for debugging
       if (process.env.NODE_ENV !== "production") {
-        console.log(
-          `[db] transformDiagram conflict for ${id}: expected v${current.version}, found v${result.currentVersion}. Retry ${attempts}/${maxRetries}`
-        );
+        log.debug("transformDiagram conflict, retrying", {
+          diagramId: id,
+          expectedVersion: current.version,
+          actualVersion: result.currentVersion,
+          attempt: attempts,
+          maxRetries,
+        });
       }
     }
 
     // Exceeded max retries - this indicates high contention
-    console.warn(
-      `[db] transformDiagram exceeded max retries for ${id} after ${attempts} attempts`
-    );
+    log.warn("transformDiagram exceeded max retries", { diagramId: id, attempts });
     return { error: "MAX_RETRIES_EXCEEDED", attempts };
   },
 
@@ -553,7 +558,7 @@ export const storage = {
       try {
         await deleteThumbnail(id);
       } catch (err) {
-        console.warn(`[db] Failed to delete thumbnail for ${id}, will be cleaned up later:`, err);
+        log.warn("Failed to delete thumbnail, will be cleaned up later", { diagramId: id, error: err instanceof Error ? err.message : String(err) });
       }
     }
 
@@ -1053,7 +1058,7 @@ export const storage = {
     // Validate all user IDs before storing
     for (const share of shares) {
       if (!this.validateUserId(share.userId)) {
-        console.error(`[db] Invalid userId in share: ${share.userId?.slice(0, 50)}`);
+        log.error("Invalid userId in share", { userId: share.userId?.slice(0, 50) });
         return false;
       }
     }
@@ -1071,7 +1076,7 @@ export const storage = {
   addShare(id: string, userId: string, permission: "editor" | "viewer"): boolean {
     // Validate userId before any operation
     if (!this.validateUserId(userId)) {
-      console.error(`[db] Invalid userId for addShare: ${userId?.slice(0, 50)}`);
+      log.error("Invalid userId for addShare", { userId: userId?.slice(0, 50) });
       return false;
     }
 
@@ -1092,7 +1097,7 @@ export const storage = {
   removeShare(id: string, userId: string): boolean {
     // Validate userId before any operation
     if (!this.validateUserId(userId)) {
-      console.error(`[db] Invalid userId for removeShare: ${userId?.slice(0, 50)}`);
+      log.error("Invalid userId for removeShare", { userId: userId?.slice(0, 50) });
       return false;
     }
 
@@ -1121,7 +1126,7 @@ export const storage = {
     // Validate userId if provided (defense in depth)
     // This prevents LIKE pattern injection even though the query is parameterized
     if (userId !== null && !this.validateUserId(userId)) {
-      console.error(`[db] Invalid userId for listDiagramsForUser: ${userId?.slice(0, 50)}`);
+      log.error("Invalid userId for listDiagramsForUser", { userId: userId?.slice(0, 50) });
       return { diagrams: [], total: 0 };
     }
 

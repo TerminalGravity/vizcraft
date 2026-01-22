@@ -8,6 +8,9 @@ import type { DiagramSpec, DiagramNode } from "../types";
 import type { LoadedAgent } from "./loader";
 import { getProvider } from "../llm";
 import { circuitBreakers, CircuitBreakerError } from "../utils/circuit-breaker";
+import { createLogger } from "../logging";
+
+const log = createLogger("agents");
 
 export interface AgentRunResult {
   success: boolean;
@@ -51,7 +54,7 @@ async function runRuleBasedAgent(agent: LoadedAgent, spec: DiagramSpec): Promise
         changes.push("Snapped nodes to 20px grid");
         break;
       default:
-        console.warn(`Unknown action: ${action}`);
+        log.warn("Unknown action", { action });
     }
   }
 
@@ -151,9 +154,12 @@ async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Agent
     if (result.success && result.spec) {
       // Log usage for debugging
       if (result.usage) {
-        console.error(
-          `[llm] ${agent.name}: ${result.usage.inputTokens} input, ${result.usage.outputTokens} output tokens (${result.usage.model})`
-        );
+        log.info("LLM transform completed", {
+          agent: agent.name,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          model: result.usage.model,
+        });
       }
 
       return {

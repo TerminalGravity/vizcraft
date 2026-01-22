@@ -7,6 +7,9 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { join } from "path";
 import type { AgentConfig } from "../types";
+import { createLogger } from "../logging";
+
+const log = createLogger("agents");
 
 // Zod schema for agent config validation
 const AgentConfigSchema = z.object({
@@ -60,7 +63,7 @@ async function loadAgentFile(filepath: string): Promise<LoadedAgent | null> {
       loadedAt: new Date().toISOString(),
     };
   } catch (err) {
-    console.error(`[agents] Failed to load ${filepath}:`, err);
+    log.error("Failed to load agent", { filepath, error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }
@@ -89,10 +92,10 @@ export async function loadAgents(forceReload = false): Promise<LoadedAgent[]> {
     }
 
     lastLoadTime = new Date();
-    console.error(`[agents] Loaded ${agents.length} agents from ${agentsDir}`);
+    log.info("Loaded agents", { count: agents.length, dir: agentsDir });
   } catch (err) {
     // Directory might not exist yet
-    console.error(`[agents] Could not scan ${agentsDir}:`, err);
+    log.warn("Could not scan agents directory", { dir: agentsDir, error: err instanceof Error ? err.message : String(err) });
   }
 
   return agents;

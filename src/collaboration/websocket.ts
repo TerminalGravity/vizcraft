@@ -15,6 +15,9 @@ import type { ClientMessage } from "./types";
 import { COLLAB_CONFIG, validateClientMessage } from "./types";
 import type { Server } from "bun";
 import { verifyJWT } from "../auth/jwt";
+import { createLogger } from "../logging";
+
+const log = createLogger("collab-ws");
 
 // WebSocket data includes authentication info
 interface WebSocketData {
@@ -63,7 +66,7 @@ export async function handleWebSocketUpgrade(req: Request, server: BunServerWith
       role = result.payload.role as "admin" | "user" | "viewer" | null;
     } else {
       // Invalid token - reject connection
-      console.warn("[collab] WebSocket upgrade rejected: invalid token");
+      log.warn("WebSocket upgrade rejected: invalid token");
       return new Response("Invalid authentication token", { status: 401 });
     }
   }
@@ -103,7 +106,7 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
   // Check message size before processing
   const messageSize = typeof message === "string" ? message.length : message.length;
   if (messageSize > COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE) {
-    console.warn(`[collab] Message too large: ${messageSize} bytes (max: ${COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE})`);
+    log.warn("Message too large", { size: messageSize, maxSize: COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE });
     wrappedWs.send(JSON.stringify({
       type: "error",
       message: `Message too large (${Math.round(messageSize / 1024)}KB). Maximum allowed: ${Math.round(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE / 1024)}KB`,
@@ -137,7 +140,7 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
     // Validate message structure with Zod
     const validation = validateClientMessage(parsed);
     if (!validation.success) {
-      console.warn(`[collab] Invalid message: ${validation.error}`);
+      log.warn("Invalid message", { error: validation.error });
       wrappedWs.send(JSON.stringify({
         type: "error",
         message: validation.error,
@@ -152,7 +155,7 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
     // But we keep explicit check for better error messages
     if (data.type === "change" && data.changes) {
       if (data.changes.length > COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE) {
-        console.warn(`[collab] Too many changes: ${data.changes.length} (max: ${COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE})`);
+        log.warn("Too many changes", { count: data.changes.length, max: COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE });
         wrappedWs.send(JSON.stringify({
           type: "error",
           message: `Too many changes in single message (${data.changes.length}). Maximum allowed: ${COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE}`,
@@ -189,10 +192,10 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
         break;
 
       default:
-        console.warn("[collab] Unknown message type:", (data as any).type);
+        log.warn("Unknown message type", { type: (data as any).type });
     }
   } catch (err) {
-    console.error("[collab] Error handling message:", err);
+    log.error("Error handling message", { error: err instanceof Error ? err.message : String(err) });
     wrappedWs.send(JSON.stringify({
       type: "error",
       message: "Internal error processing message",
@@ -213,7 +216,7 @@ export function handleWebSocketClose(ws: BunWebSocket): void {
  * Handle WebSocket error
  */
 export function handleWebSocketError(ws: BunWebSocket, error: Error): void {
-  console.error("[collab] WebSocket error:", error);
+  log.error("WebSocket error", { error: error.message });
   const wrappedWs = wrapWebSocket(ws);
   roomManager.handleDisconnect(wrappedWs);
 }

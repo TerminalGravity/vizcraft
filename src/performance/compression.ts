@@ -6,6 +6,9 @@
  */
 
 import type { DiagramSpec } from "../types";
+import { createLogger } from "../logging";
+
+const log = createLogger("compression");
 
 const COMPRESSION_THRESHOLD = 10 * 1024; // 10KB - compress specs larger than this
 
@@ -51,11 +54,17 @@ export async function compressSpec(spec: DiagramSpec): Promise<string> {
     // Only use compression if it actually reduces size
     if (compressed.length < json.length * 0.8) {
       const base64 = btoa(String.fromCharCode(...compressed));
-      console.log(`[compression] Compressed ${json.length} -> ${base64.length + 3} bytes (${((1 - (base64.length + 3) / json.length) * 100).toFixed(1)}% reduction)`);
+      const compressedSize = base64.length + 3;
+      const reductionPct = ((1 - compressedSize / json.length) * 100).toFixed(1);
+      log.info("Compressed spec", {
+        originalBytes: json.length,
+        compressedBytes: compressedSize,
+        reductionPct,
+      });
       return `gz:${base64}`;
     }
   } catch (err) {
-    console.warn("[compression] Compression failed, using raw JSON:", err);
+    log.warn("Compression failed, using raw JSON", { error: err instanceof Error ? err.message : String(err) });
   }
 
   return json;
@@ -105,7 +114,7 @@ export async function decompressSpec(data: string): Promise<DiagramSpec> {
     const json = decoder.decode(decompressed);
     return JSON.parse(json);
   } catch (err) {
-    console.error("[compression] Decompression failed:", err);
+    log.error("Decompression failed", { error: err instanceof Error ? err.message : String(err) });
     throw new Error("Failed to decompress diagram spec");
   }
 }

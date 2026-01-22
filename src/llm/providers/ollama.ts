@@ -19,6 +19,9 @@ import type {
 } from "../types";
 import { DiagramTransformOutputSchema } from "../types";
 import type { DiagramSpec } from "../../types";
+import { createLogger } from "../../logging";
+
+const log = createLogger("ollama");
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -141,9 +144,10 @@ export class OllamaProvider implements LLMProvider {
       );
 
       if (!hasModel) {
-        console.warn(
-          `[ollama] Model "${this.model}" not found. Available: ${data.models?.map((m) => m.name).join(", ") || "none"}`
-        );
+        log.warn("Model not found", {
+          model: this.model,
+          available: data.models?.map((m) => m.name).join(", ") || "none",
+        });
       }
 
       return response.ok;
@@ -229,7 +233,7 @@ export class OllamaProvider implements LLMProvider {
         try {
           parsed = JSON.parse(result.response);
         } catch (parseError) {
-          console.error("[ollama] Failed to parse JSON response:", result.response.slice(0, 200));
+          log.error("Failed to parse JSON response", { preview: result.response.slice(0, 200) });
           if (attempt < maxRetries) {
             await this.delay(Math.pow(2, attempt) * 500);
             continue;
@@ -244,7 +248,7 @@ export class OllamaProvider implements LLMProvider {
         const parseResult = DiagramTransformOutputSchema.safeParse(parsed);
 
         if (!parseResult.success) {
-          console.error("[ollama] Invalid schema:", parseResult.error.message);
+          log.error("Invalid schema", { error: parseResult.error.message });
           if (attempt < maxRetries) {
             await this.delay(Math.pow(2, attempt) * 500);
             continue;
@@ -287,10 +291,11 @@ export class OllamaProvider implements LLMProvider {
           model: this.model,
         };
 
-        console.log(
-          `[ollama] Transform completed in ${Math.round(duration)}ms, ` +
-            `${usage.inputTokens} input tokens, ${usage.outputTokens} output tokens`
-        );
+        log.info("Transform completed", {
+          durationMs: Math.round(duration),
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+        });
 
         return {
           success: true,
@@ -306,7 +311,7 @@ export class OllamaProvider implements LLMProvider {
           lastError = new Error(`Request timed out after ${this.timeoutMs}ms`);
         }
 
-        console.error(`[ollama] Attempt ${attempt + 1} failed:`, lastError.message);
+        log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
         if (attempt < maxRetries) {
           await this.delay(Math.pow(2, attempt) * 500);
