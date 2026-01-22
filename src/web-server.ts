@@ -478,12 +478,13 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
   }
 });
 
-// Update diagram with optimistic locking support (body size limited)
-// Supports If-Match header for version checking - returns 409 Conflict if versions don't match
+// Update diagram with optimistic locking (body size limited)
+// REQUIRES If-Match header for version checking - returns 409 Conflict if versions don't match
+// Use force: true in body to bypass version checking (use with caution in collaboration scenarios)
 app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
   try {
     const id = c.req.param("id");
-    const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
+    const body = await c.req.json<{ spec: DiagramSpec; message?: string; force?: boolean }>();
 
     if (!body.spec) {
       return validationErrorResponse(c, "Spec is required");
@@ -503,6 +504,18 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
         );
       }
       baseVersion = parseInt(versionMatch[1], 10);
+    }
+
+    // Require version checking unless explicitly forced
+    // This prevents silent data loss in collaboration scenarios
+    if (baseVersion === undefined && !body.force) {
+      return c.json({
+        error: {
+          code: "VERSION_REQUIRED",
+          message: "If-Match header with version is required for safe updates. Use force: true in body to override (may lose concurrent changes).",
+          hint: "First GET the diagram to obtain its version, then include If-Match: \"v{version}\" header",
+        },
+      }, 428); // 428 Precondition Required
     }
 
     // Invalidate cache BEFORE update for stronger consistency

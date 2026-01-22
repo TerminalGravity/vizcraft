@@ -30,6 +30,7 @@ testDb.run(`
     name TEXT NOT NULL,
     project TEXT NOT NULL,
     spec TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
     thumbnail_url TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -57,6 +58,7 @@ interface DiagramRow {
   name: string;
   project: string;
   spec: string;
+  version: number;
   thumbnail_url: string | null;
   created_at: string;
   updated_at: string;
@@ -73,21 +75,21 @@ interface VersionRow {
 
 // Test storage (isolated from production)
 const testStorage = {
-  createDiagram(name: string, project: string, spec: DiagramSpec): Diagram {
+  createDiagram(name: string, project: string, spec: DiagramSpec): Diagram & { version: number } {
     const id = nanoid(12);
     const now = new Date().toISOString();
 
     testDb.run(
-      `INSERT INTO diagrams (id, name, project, spec, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO diagrams (id, name, project, spec, version, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
       [id, name, project, JSON.stringify(spec), now, now]
     );
 
     this.createVersion(id, spec, "Initial version");
 
-    return { id, name, project, spec, createdAt: now, updatedAt: now };
+    return { id, name, project, spec, version: 1, createdAt: now, updatedAt: now };
   },
 
-  getDiagram(id: string): Diagram | null {
+  getDiagram(id: string): (Diagram & { version: number }) | null {
     const row = testDb.query<DiagramRow, [string]>(`SELECT * FROM diagrams WHERE id = ?`).get(id);
     if (!row) return null;
     return {
@@ -95,15 +97,41 @@ const testStorage = {
       name: row.name,
       project: row.project,
       spec: JSON.parse(row.spec),
+      version: row.version,
       thumbnailUrl: row.thumbnail_url || undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   },
 
-  updateDiagram(id: string, spec: DiagramSpec, message?: string): Diagram | null {
+  updateDiagram(
+    id: string,
+    spec: DiagramSpec,
+    message?: string,
+    baseVersion?: number
+  ): (Diagram & { version: number }) | null | { conflict: true; currentVersion: number } {
     const now = new Date().toISOString();
-    testDb.run(`UPDATE diagrams SET spec = ?, updated_at = ? WHERE id = ?`, [JSON.stringify(spec), now, id]);
+
+    if (baseVersion !== undefined) {
+      // Optimistic locking
+      const result = testDb.run(
+        `UPDATE diagrams SET spec = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`,
+        [JSON.stringify(spec), now, id, baseVersion]
+      );
+
+      if (result.changes === 0) {
+        const existing = this.getDiagram(id);
+        if (!existing) return null;
+        return { conflict: true, currentVersion: existing.version };
+      }
+    } else {
+      // Blind update (no version check)
+      testDb.run(
+        `UPDATE diagrams SET spec = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(spec), now, id]
+      );
+    }
+
     this.createVersion(id, spec, message);
     return this.getDiagram(id);
   },
@@ -359,22 +387,62 @@ function createTestApp() {
     }
   });
 
-  // Update diagram
+  // Update diagram with optimistic locking
   app.put("/api/diagrams/:id", async (c) => {
     try {
       const id = c.req.param("id");
-      const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
+      const body = await c.req.json<{ spec: DiagramSpec; message?: string; force?: boolean }>();
 
       if (!body.spec) {
         return validationErrorResponse(c, "Spec is required");
       }
 
-      if (!testStorage.getDiagram(id)) {
+      // Check If-Match header for optimistic locking
+      const ifMatch = c.req.header("If-Match");
+      let baseVersion: number | undefined;
+
+      if (ifMatch) {
+        const versionMatch = ifMatch.replace(/"/g, "").match(/^v?(\d+)$/);
+        if (!versionMatch) {
+          return validationErrorResponse(
+            c,
+            "Invalid If-Match header format. Expected \"v{version}\" or \"{version}\""
+          );
+        }
+        baseVersion = parseInt(versionMatch[1], 10);
+      }
+
+      // Require version checking unless explicitly forced
+      if (baseVersion === undefined && !body.force) {
+        return c.json({
+          error: {
+            code: "VERSION_REQUIRED",
+            message: "If-Match header with version is required for safe updates. Use force: true in body to override (may lose concurrent changes).",
+            hint: "First GET the diagram to obtain its version, then include If-Match: \"v{version}\" header",
+          },
+        }, 428); // 428 Precondition Required
+      }
+
+      const result = testStorage.updateDiagram(id, body.spec, body.message, baseVersion);
+
+      if (result === null) {
         return notFoundResponse(c, "Diagram", id);
       }
 
-      const updated = testStorage.updateDiagram(id, body.spec, body.message);
-      return c.json(updated);
+      if (typeof result === "object" && "conflict" in result) {
+        return c.json({
+          error: {
+            code: "VERSION_CONFLICT",
+            message: `Version conflict: expected version ${baseVersion}, but current version is ${result.currentVersion}`,
+            details: { currentVersion: result.currentVersion },
+          },
+        }, 409);
+      }
+
+      // Set ETag header with new version
+      c.header("ETag", `"v${result.version}"`);
+
+      return c.json(result);
     } catch (err) {
       if (err instanceof SyntaxError) {
         return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
@@ -545,10 +613,15 @@ const sampleArchitectureSpec: DiagramSpec = {
 const app = createTestApp();
 
 // Helper to make API requests
-async function apiRequest(method: string, path: string, body?: unknown) {
+async function apiRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+  headers?: Record<string, string>
+) {
   const options: RequestInit = {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   };
   if (body) {
     options.body = JSON.stringify(body);
@@ -805,12 +878,13 @@ describe("Diagrams API", () => {
   });
 
   describe("PUT /api/diagrams/:id", () => {
-    it("updates diagram spec", async () => {
+    it("updates diagram with force flag", async () => {
       const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
 
       const res = await apiRequest("PUT", `/api/diagrams/${diagram.id}`, {
         spec: sampleArchitectureSpec,
         message: "Updated to architecture",
+        force: true,
       });
 
       expect(res.status).toBe(200);
@@ -819,11 +893,75 @@ describe("Diagrams API", () => {
       expect(data.spec.type).toBe("architecture");
     });
 
+    it("updates diagram with If-Match header", async () => {
+      const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+
+      const res = await apiRequest(
+        "PUT",
+        `/api/diagrams/${diagram.id}`,
+        { spec: sampleArchitectureSpec },
+        { "If-Match": `"v${diagram.version}"` }
+      );
+
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.spec.type).toBe("architecture");
+      expect(data.version).toBe(diagram.version + 1);
+    });
+
+    it("returns ETag header with new version", async () => {
+      const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+
+      const res = await apiRequest(
+        "PUT",
+        `/api/diagrams/${diagram.id}`,
+        { spec: sampleArchitectureSpec },
+        { "If-Match": `"v${diagram.version}"` }
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("ETag")).toBe(`"v${diagram.version + 1}"`);
+    });
+
+    it("returns 428 Precondition Required when neither If-Match nor force provided", async () => {
+      const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+
+      const res = await apiRequest("PUT", `/api/diagrams/${diagram.id}`, {
+        spec: sampleArchitectureSpec,
+      });
+
+      expect(res.status).toBe(428);
+
+      const data = await res.json();
+      expect(data.error.code).toBe("VERSION_REQUIRED");
+      expect(data.error.hint).toContain("If-Match");
+    });
+
+    it("returns 409 Conflict on version mismatch", async () => {
+      const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+      // Diagram is at version 1, but we pretend we have version 99
+      const wrongVersion = 99;
+
+      const res = await apiRequest(
+        "PUT",
+        `/api/diagrams/${diagram.id}`,
+        { spec: sampleArchitectureSpec },
+        { "If-Match": `"v${wrongVersion}"` }
+      );
+
+      expect(res.status).toBe(409);
+
+      const data = await res.json();
+      expect(data.error.code).toBe("VERSION_CONFLICT");
+      expect(data.error.details.currentVersion).toBe(diagram.version);
+    });
+
     it("creates new version on update", async () => {
       const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
 
       await apiRequest("PUT", `/api/diagrams/${diagram.id}`, {
         spec: sampleArchitectureSpec,
+        force: true,
       });
 
       const versions = testStorage.getVersions(diagram.id);
@@ -833,6 +971,7 @@ describe("Diagrams API", () => {
     it("returns 404 for non-existent diagram", async () => {
       const res = await apiRequest("PUT", "/api/diagrams/nonexistent", {
         spec: sampleFlowchartSpec,
+        force: true,
       });
 
       expect(res.status).toBe(404);
@@ -841,12 +980,33 @@ describe("Diagrams API", () => {
     it("returns 400 when spec is missing", async () => {
       const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
 
-      const res = await apiRequest("PUT", `/api/diagrams/${diagram.id}`, {});
+      const res = await apiRequest("PUT", `/api/diagrams/${diagram.id}`, { force: true });
 
       expect(res.status).toBe(400);
 
       const data = await res.json();
       expect(data.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    it("detects concurrent modification", async () => {
+      const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+      const initialVersion = diagram.version;
+
+      // Simulate another client updating the diagram (increments version to 2)
+      testStorage.updateDiagram(diagram.id, sampleArchitectureSpec, "Other client update", initialVersion);
+
+      // Our update should now fail because we're using the old version
+      const res = await apiRequest(
+        "PUT",
+        `/api/diagrams/${diagram.id}`,
+        { spec: sampleFlowchartSpec },
+        { "If-Match": `"v${initialVersion}"` }
+      );
+
+      expect(res.status).toBe(409);
+
+      const data = await res.json();
+      expect(data.error.code).toBe("VERSION_CONFLICT");
     });
   });
 
