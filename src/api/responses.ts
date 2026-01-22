@@ -128,7 +128,7 @@ export function errorResponse(
   c: Context,
   code: string,
   message: string,
-  status: 400 | 401 | 403 | 404 | 500 = 400,
+  status: 400 | 401 | 403 | 404 | 408 | 409 | 422 | 428 | 429 | 500 | 502 | 503 | 504 = 400,
   details?: unknown
 ) {
   const response: ErrorResponse = {
