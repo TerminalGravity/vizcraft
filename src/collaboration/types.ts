@@ -68,6 +68,16 @@ export const COLLAB_CONFIG = {
   // Cursor update throttle
   CURSOR_THROTTLE_MS: 50,
 
+  // Rate limiting
+  RATE_LIMIT: {
+    // Maximum messages per window
+    MAX_MESSAGES: 20,
+    // Window size in milliseconds
+    WINDOW_MS: 1000,
+    // Warnings before disconnect
+    MAX_WARNINGS: 3,
+  },
+
   // Color palette for participants
   PARTICIPANT_COLORS: [
     "#3b82f6", // blue

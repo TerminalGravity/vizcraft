@@ -16,12 +16,20 @@ type WebSocketConnection = {
   readyState: number;
 };
 
+// Rate limit state for a connection
+interface RateLimitState {
+  messageCount: number;
+  windowStart: number;
+  warnings: number;
+}
+
 // Connection state
 interface ConnectionState {
   ws: WebSocketConnection;
   participantId: string;
   diagramId: string | null;
   pingInterval?: ReturnType<typeof setInterval>;
+  rateLimit: RateLimitState;
 }
 
 class RoomManager {
@@ -37,6 +45,11 @@ class RoomManager {
       ws,
       participantId: nanoid(8),
       diagramId: null,
+      rateLimit: {
+        messageCount: 0,
+        windowStart: Date.now(),
+        warnings: 0,
+      },
     };
     this.connections.set(ws, state);
 
@@ -340,6 +353,62 @@ class RoomManager {
     }
 
     return cleaned;
+  }
+
+  /**
+   * Check rate limit for a connection
+   * Returns true if message is allowed, false if rate limited
+   */
+  checkRateLimit(ws: WebSocketConnection): boolean {
+    const state = this.connections.get(ws);
+    if (!state) return false;
+
+    const now = Date.now();
+    const { RATE_LIMIT } = COLLAB_CONFIG;
+
+    // Reset window if expired
+    if (now - state.rateLimit.windowStart > RATE_LIMIT.WINDOW_MS) {
+      state.rateLimit.messageCount = 0;
+      state.rateLimit.windowStart = now;
+    }
+
+    state.rateLimit.messageCount++;
+
+    // Check if over limit
+    if (state.rateLimit.messageCount > RATE_LIMIT.MAX_MESSAGES) {
+      state.rateLimit.warnings++;
+
+      if (state.rateLimit.warnings >= RATE_LIMIT.MAX_WARNINGS) {
+        // Too many warnings, disconnect
+        console.warn(`[collab] Rate limit exceeded, disconnecting: ${state.participantId}`);
+        this.send(ws, {
+          type: "error",
+          message: "Rate limit exceeded - disconnected",
+          code: "RATE_LIMIT_EXCEEDED",
+        });
+        ws.close();
+        return false;
+      }
+
+      // Send warning
+      this.send(ws, {
+        type: "error",
+        message: `Rate limit warning (${state.rateLimit.warnings}/${RATE_LIMIT.MAX_WARNINGS})`,
+        code: "RATE_LIMIT_WARNING",
+      });
+
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Get rate limit state for a connection (for testing/monitoring)
+   */
+  getRateLimitState(ws: WebSocketConnection): RateLimitState | null {
+    const state = this.connections.get(ws);
+    return state ? { ...state.rateLimit } : null;
   }
 
   // Private helpers

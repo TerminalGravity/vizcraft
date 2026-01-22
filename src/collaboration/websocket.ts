@@ -63,6 +63,11 @@ export function handleWebSocketOpen(ws: BunWebSocket): void {
 export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffer): void {
   const wrappedWs = wrapWebSocket(ws);
 
+  // Check rate limit before processing
+  if (!roomManager.checkRateLimit(wrappedWs)) {
+    return; // Rate limited, message already sent to client
+  }
+
   try {
     const data = JSON.parse(message.toString()) as ClientMessage;
 

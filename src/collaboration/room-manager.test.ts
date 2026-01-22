@@ -4,6 +4,31 @@
 
 import { describe, it, expect, beforeEach } from "bun:test";
 import { COLLAB_CONFIG } from "./types";
+import { roomManager } from "./room-manager";
+
+// Create a mock WebSocket
+function createMockWs(): MockWebSocket {
+  return {
+    readyState: 1,
+    messages: [],
+    closed: false,
+    send(message: string) {
+      this.messages.push(message);
+    },
+    close() {
+      this.closed = true;
+      this.readyState = 3;
+    },
+  };
+}
+
+interface MockWebSocket {
+  readyState: number;
+  messages: string[];
+  closed: boolean;
+  send: (message: string) => void;
+  close: () => void;
+}
 
 // We'll test the types and config since the room manager
 // requires actual WebSocket connections to test fully
@@ -137,5 +162,191 @@ describe("Message Types", () => {
     };
     expect(conflictMsg.type).toBe("conflict");
     expect(conflictMsg.currentVersion).toBe(5);
+  });
+});
+
+describe("Rate Limiting Config", () => {
+  it("has sensible rate limit settings", () => {
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGES).toBeGreaterThan(0);
+    expect(COLLAB_CONFIG.RATE_LIMIT.WINDOW_MS).toBeGreaterThan(0);
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_WARNINGS).toBeGreaterThan(0);
+  });
+
+  it("window is at least 1 second", () => {
+    expect(COLLAB_CONFIG.RATE_LIMIT.WINDOW_MS).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("allows reasonable message burst", () => {
+    // Should allow at least 10 messages per second for real-time collab
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGES).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe("Rate Limiting Logic", () => {
+  it("allows messages under the rate limit", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    // Send messages up to the limit
+    for (let i = 0; i < COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGES; i++) {
+      const allowed = roomManager.checkRateLimit(ws);
+      expect(allowed).toBe(true);
+    }
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("sends warning when rate limit exceeded", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    // Send messages up to limit
+    for (let i = 0; i < COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGES; i++) {
+      roomManager.checkRateLimit(ws);
+    }
+
+    // Clear previous messages
+    ws.messages = [];
+
+    // Next message should trigger warning
+    const allowed = roomManager.checkRateLimit(ws);
+
+    expect(allowed).toBe(false);
+    expect(ws.messages.length).toBe(1);
+    expect(JSON.parse(ws.messages[0]).code).toBe("RATE_LIMIT_WARNING");
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("provides rate limit state for monitoring", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    // Send some messages
+    for (let i = 0; i < 5; i++) {
+      roomManager.checkRateLimit(ws);
+    }
+
+    const state = roomManager.getRateLimitState(ws);
+    expect(state).not.toBeNull();
+    expect(state!.messageCount).toBe(5);
+    expect(state!.warnings).toBe(0);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("returns null for unregistered connection", () => {
+    const ws = createMockWs();
+
+    const state = roomManager.getRateLimitState(ws);
+    expect(state).toBeNull();
+
+    const allowed = roomManager.checkRateLimit(ws);
+    expect(allowed).toBe(false);
+  });
+
+  it("resets rate limit after window expires", async () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    // Fill up the limit
+    for (let i = 0; i < COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGES; i++) {
+      roomManager.checkRateLimit(ws);
+    }
+
+    // Trigger warning
+    let allowed = roomManager.checkRateLimit(ws);
+    expect(allowed).toBe(false);
+
+    // Wait for window to expire
+    await new Promise(resolve => setTimeout(resolve, COLLAB_CONFIG.RATE_LIMIT.WINDOW_MS + 50));
+
+    // Should be allowed again
+    allowed = roomManager.checkRateLimit(ws);
+    expect(allowed).toBe(true);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+});
+
+describe("RoomManager Connection Handling", () => {
+  it("registers new connections", () => {
+    const ws = createMockWs();
+    const statsBefore = roomManager.getStats();
+
+    roomManager.registerConnection(ws);
+
+    const statsAfter = roomManager.getStats();
+    expect(statsAfter.connections).toBe(statsBefore.connections + 1);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("handles disconnect cleanly", () => {
+    const ws = createMockWs();
+
+    roomManager.registerConnection(ws);
+    const statsBefore = roomManager.getStats();
+
+    roomManager.handleDisconnect(ws);
+    const statsAfter = roomManager.getStats();
+
+    expect(statsAfter.connections).toBe(statsBefore.connections - 1);
+  });
+});
+
+describe("RoomManager Room Operations", () => {
+  it("creates room on first join", () => {
+    const ws = createMockWs();
+    const diagramId = `test-diagram-${Date.now()}`;
+
+    roomManager.registerConnection(ws);
+    roomManager.joinRoom(ws, diagramId, "Test User");
+
+    const roomInfo = roomManager.getRoomInfo(diagramId);
+    expect(roomInfo).not.toBeNull();
+    expect(roomInfo!.participants.length).toBe(1);
+    expect(roomInfo!.participants[0].name).toBe("Test User");
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("adds multiple participants to same room", () => {
+    const ws1 = createMockWs();
+    const ws2 = createMockWs();
+    const diagramId = `shared-diagram-${Date.now()}`;
+
+    roomManager.registerConnection(ws1);
+    roomManager.registerConnection(ws2);
+    roomManager.joinRoom(ws1, diagramId, "User 1");
+    roomManager.joinRoom(ws2, diagramId, "User 2");
+
+    const roomInfo = roomManager.getRoomInfo(diagramId);
+    expect(roomInfo!.participants.length).toBe(2);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws1);
+    roomManager.handleDisconnect(ws2);
+  });
+
+  it("removes participant on leave", () => {
+    const ws = createMockWs();
+    const diagramId = `leave-test-${Date.now()}`;
+
+    roomManager.registerConnection(ws);
+    roomManager.joinRoom(ws, diagramId, "Leaver");
+    roomManager.leaveRoom(ws);
+
+    const roomInfo = roomManager.getRoomInfo(diagramId);
+    expect(roomInfo).toBeNull(); // Room cleaned up when empty
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
   });
 });
