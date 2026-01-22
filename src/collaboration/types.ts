@@ -76,6 +76,10 @@ export const COLLAB_CONFIG = {
     WINDOW_MS: 1000,
     // Warnings before disconnect
     MAX_WARNINGS: 3,
+    // Maximum message size in bytes (1MB)
+    MAX_MESSAGE_SIZE: 1024 * 1024,
+    // Maximum changes per message (prevents massive payloads)
+    MAX_CHANGES_PER_MESSAGE: 100,
   },
 
   // Color palette for participants

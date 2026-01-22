@@ -580,3 +580,19 @@ describe("Room Info", () => {
     roomManager.handleDisconnect(ws);
   });
 });
+
+describe("Message Size Limits", () => {
+  it("has message size limit configured", () => {
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE).toBeDefined();
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE).toBeGreaterThan(0);
+    // Default is 1MB
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE).toBe(1024 * 1024);
+  });
+
+  it("has changes per message limit configured", () => {
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE).toBeDefined();
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE).toBeGreaterThan(0);
+    // Default is 100
+    expect(COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE).toBe(100);
+  });
+});

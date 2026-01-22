@@ -7,6 +7,7 @@
 
 import { roomManager } from "./room-manager";
 import type { ClientMessage } from "./types";
+import { COLLAB_CONFIG } from "./types";
 import type { Server } from "bun";
 
 // Track WebSocket to ServerWebSocket mapping for Bun
@@ -63,6 +64,18 @@ export function handleWebSocketOpen(ws: BunWebSocket): void {
 export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffer): void {
   const wrappedWs = wrapWebSocket(ws);
 
+  // Check message size before processing
+  const messageSize = typeof message === "string" ? message.length : message.length;
+  if (messageSize > COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE) {
+    console.warn(`[collab] Message too large: ${messageSize} bytes (max: ${COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE})`);
+    wrappedWs.send(JSON.stringify({
+      type: "error",
+      message: `Message too large (${Math.round(messageSize / 1024)}KB). Maximum allowed: ${Math.round(COLLAB_CONFIG.RATE_LIMIT.MAX_MESSAGE_SIZE / 1024)}KB`,
+      code: "MESSAGE_TOO_LARGE",
+    }));
+    return;
+  }
+
   // Check rate limit before processing
   if (!roomManager.checkRateLimit(wrappedWs)) {
     return; // Rate limited, message already sent to client
@@ -70,6 +83,19 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
 
   try {
     const data = JSON.parse(message.toString()) as ClientMessage;
+
+    // Validate change count for change messages
+    if (data.type === "change" && data.changes) {
+      if (data.changes.length > COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE) {
+        console.warn(`[collab] Too many changes: ${data.changes.length} (max: ${COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE})`);
+        wrappedWs.send(JSON.stringify({
+          type: "error",
+          message: `Too many changes in single message (${data.changes.length}). Maximum allowed: ${COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE}`,
+          code: "TOO_MANY_CHANGES",
+        }));
+        return;
+      }
+    }
 
     switch (data.type) {
       case "join":
