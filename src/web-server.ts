@@ -1614,7 +1614,19 @@ function generateSVG(spec: DiagramSpec): string {
       const x2 = sanitizeNumber(to.x + nodeWidth / 2);
       const y2 = sanitizeNumber(to.y);
 
-      svg += `  <line class="edge" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />\n`;
+      // Build edge style with sanitized values
+      const edgeStyles: string[] = [];
+      if (edge.color) {
+        edgeStyles.push(`stroke: ${escapeAttribute(sanitizeColor(edge.color, "#64748b"))}`);
+      }
+      if (edge.style === "dashed") {
+        edgeStyles.push("stroke-dasharray: 8,4");
+      } else if (edge.style === "dotted") {
+        edgeStyles.push("stroke-dasharray: 2,2");
+      }
+      const edgeStyleAttr = edgeStyles.length > 0 ? ` style="${edgeStyles.join("; ")}"` : "";
+
+      svg += `  <line class="edge"${edgeStyleAttr} x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />\n`;
 
       if (edge.label) {
         const midX = sanitizeNumber((x1 + x2) / 2);

@@ -381,3 +381,80 @@ describe("XSS attack vectors", () => {
     // The current regex handles standard patterns; unusual whitespace is edge case
   });
 });
+
+describe("Color-based XSS attack vectors", () => {
+  // Tests for color injection attempts that might bypass simple validation
+
+  test("sanitizeColor blocks expression() CSS attack", () => {
+    expect(sanitizeColor("expression(alert(1))")).toBe("#000000");
+  });
+
+  test("sanitizeColor blocks url() in color value", () => {
+    expect(sanitizeColor("url(javascript:alert(1))")).toBe("#000000");
+  });
+
+  test("sanitizeColor blocks behavior: CSS attack", () => {
+    expect(sanitizeColor("behavior:url(malicious.htc)")).toBe("#000000");
+  });
+
+  test("sanitizeColor blocks -moz-binding attack", () => {
+    expect(sanitizeColor("-moz-binding:url(xss.xml#xss)")).toBe("#000000");
+  });
+
+  test("sanitizeColor blocks newline injection", () => {
+    expect(sanitizeColor("red;}\n.evil{color:blue")).toBe("#000000");
+  });
+
+  test("sanitizeColor blocks style escape attempt", () => {
+    expect(sanitizeColor('red"onmouseover="alert(1)')).toBe("#000000");
+  });
+
+  test("sanitizeColor with valid hex passes through", () => {
+    expect(sanitizeColor("#abc")).toBe("#abc");
+    expect(sanitizeColor("#aabbcc")).toBe("#aabbcc");
+    expect(sanitizeColor("#aabbccdd")).toBe("#aabbccdd");
+  });
+
+  test("escapeAttribute strips dangerous patterns from style value", () => {
+    // Even if somehow a bad value got through sanitizeColor
+    // Note: onclick: (with colon) is NOT an event handler - onclick= (with equals) is
+    expect(escapeAttribute("red;onclick=alert(1)")).not.toContain("onclick=");
+    expect(escapeAttribute("javascript:void(0)")).not.toContain("javascript:");
+  });
+});
+
+describe("Style attribute injection vectors", () => {
+  test("escapeAttribute blocks style closing attempt", () => {
+    const input = 'red" style="background:url(javascript:alert(1))';
+    const escaped = escapeAttribute(input);
+    expect(escaped).not.toContain("javascript:");
+  });
+
+  test("escapeAttribute blocks data: URL in style", () => {
+    const input = "url(data:text/html,<script>alert(1)</script>)";
+    const escaped = escapeAttribute(input);
+    expect(escaped).not.toContain("data:");
+  });
+
+  test("escapeAttribute strips event handlers with equals sign", () => {
+    // Real attack vectors use onclick= (with equals), not onclick: (with colon)
+    expect(escapeAttribute("red;onclick=alert(1)")).not.toContain("onclick=");
+    expect(escapeAttribute("red; onmouseover =alert(1)")).not.toContain("onmouseover");
+    expect(escapeAttribute('value" onfocus="alert(1)')).not.toContain("onfocus=");
+  });
+
+  test("escapeAttribute handles javascript: in various contexts", () => {
+    expect(escapeAttribute("javascript:void(0)")).not.toContain("javascript:");
+    expect(escapeAttribute("href=javascript:alert(1)")).not.toContain("javascript:");
+    expect(escapeAttribute("JAVASCRIPT:alert(1)")).not.toContain("javascript:"); // case-insensitive
+  });
+
+  test("svgElement properly escapes combined attacks", () => {
+    const el = svgElement("rect", {
+      fill: 'red" onclick="alert(1)" x="',
+      x: 10,
+    });
+    expect(el).not.toContain("onclick=");
+    // The escapeAttribute should neutralize the injection
+  });
+});
