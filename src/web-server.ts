@@ -39,6 +39,7 @@ import {
 import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
 import { rateLimiters } from "./api/rate-limiter";
+import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import {
   withTimeout,
   TimeoutError,
@@ -107,8 +108,24 @@ app.notFound((c) => {
   return c.text("Not Found", 404);
 });
 
-// Health check
-app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+// Health checks - comprehensive status for monitoring
+app.get("/api/health", async (c) => {
+  const health = await runHealthChecks();
+
+  // Return appropriate status code based on health
+  const statusCode = health.status === "healthy" ? 200 : health.status === "degraded" ? 200 : 503;
+
+  return c.json(health, statusCode);
+});
+
+// Liveness probe - simple check if server is running
+app.get("/api/health/live", (c) => c.json(livenessCheck()));
+
+// Readiness probe - check if server is ready to accept traffic
+app.get("/api/health/ready", async (c) => {
+  const result = await readinessCheck();
+  return c.json(result, result.ready ? 200 : 503);
+});
 
 // List diagrams with pagination and caching
 app.get("/api/diagrams", (c) => {
