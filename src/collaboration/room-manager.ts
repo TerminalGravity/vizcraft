@@ -6,7 +6,7 @@
  */
 
 import { nanoid } from "nanoid";
-import type { Room, Participant, RoomState, ServerMessage } from "./types";
+import type { Room, Participant, RoomState, ServerMessage, DiagramChange } from "./types";
 import { COLLAB_CONFIG } from "./types";
 
 // WebSocket connection type with optional user info
@@ -249,7 +249,7 @@ class RoomManager {
   /**
    * Handle diagram changes from a participant
    */
-  handleChanges(ws: WebSocketConnection, changes: unknown[], baseVersion: number): boolean {
+  handleChanges(ws: WebSocketConnection, changes: DiagramChange[], baseVersion: number): boolean {
     const state = this.connections.get(ws);
     if (!state || !state.diagramId) {
       this.send(ws, { type: "error", message: "Not in a room", code: "NOT_IN_ROOM" });
@@ -275,7 +275,7 @@ class RoomManager {
     // Broadcast changes to all participants (including sender for confirmation)
     this.broadcastToRoom(state.diagramId, {
       type: "changes",
-      changes: changes as any,
+      changes,
       author: state.participantId,
       version: room.version,
     });

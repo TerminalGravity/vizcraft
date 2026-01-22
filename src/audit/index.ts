@@ -10,20 +10,33 @@
 
 import type { UserContext } from "../auth";
 
-export type AuditAction =
-  | "diagram.create"
-  | "diagram.update"
-  | "diagram.delete"
-  | "diagram.fork"
-  | "diagram.restore"
-  | "diagram.apply_layout"
-  | "diagram.apply_theme"
-  | "diagram.run_agent"
-  | "diagram.thumbnail_update"
-  | "share.add"
-  | "share.remove"
-  | "ownership.transfer"
-  | "visibility.change";
+/**
+ * Valid audit actions as a const array for runtime validation
+ */
+export const AUDIT_ACTIONS = [
+  "diagram.create",
+  "diagram.update",
+  "diagram.delete",
+  "diagram.fork",
+  "diagram.restore",
+  "diagram.apply_layout",
+  "diagram.apply_theme",
+  "diagram.run_agent",
+  "diagram.thumbnail_update",
+  "share.add",
+  "share.remove",
+  "ownership.transfer",
+  "visibility.change",
+] as const;
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/**
+ * Type guard to check if a string is a valid AuditAction
+ */
+export function isValidAuditAction(value: string | undefined): value is AuditAction {
+  return value !== undefined && (AUDIT_ACTIONS as readonly string[]).includes(value);
+}
 
 export interface AuditEntry {
   timestamp: string;

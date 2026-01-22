@@ -97,7 +97,7 @@ import {
   stopThumbnailCleanup,
   getThumbnailCleanupStats,
 } from "./storage/thumbnails";
-import { audit, getAuditLog, getAuditStats, getAuditContext } from "./audit";
+import { audit, getAuditLog, getAuditStats, getAuditContext, isValidAuditAction } from "./audit";
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -1326,17 +1326,23 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
 
     const limitParam = c.req.query("limit");
     const userId = c.req.query("userId");
-    const action = c.req.query("action");
+    const actionParam = c.req.query("action");
     const resourceId = c.req.query("resourceId");
     const sinceParam = c.req.query("since");
 
     const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
     const since = sinceParam ? new Date(sinceParam) : undefined;
 
+    // Validate action parameter if provided
+    const action = actionParam && isValidAuditAction(actionParam) ? actionParam : undefined;
+    if (actionParam && !action) {
+      return errorResponse(c, "INVALID_ACTION", `Invalid audit action: ${actionParam}`, 400);
+    }
+
     const entries = getAuditLog({
       limit,
       userId: userId || undefined,
-      action: action as any,
+      action,
       resourceId: resourceId || undefined,
       since,
     });
