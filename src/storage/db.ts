@@ -941,9 +941,38 @@ export const storage = {
   },
 
   /**
+   * Validate a user ID format for share operations
+   * User IDs must be non-empty strings with reasonable length and safe characters
+   */
+  validateUserId(userId: string): boolean {
+    // Must be a non-empty string
+    if (!userId || typeof userId !== "string") {
+      return false;
+    }
+    // Reasonable length (1-255 chars)
+    if (userId.length < 1 || userId.length > 255) {
+      return false;
+    }
+    // Only allow alphanumeric, dash, underscore, and @ (for email-style IDs)
+    // This prevents JSON injection and other special character attacks
+    if (!/^[a-zA-Z0-9_@.-]+$/.test(userId)) {
+      return false;
+    }
+    return true;
+  },
+
+  /**
    * Update diagram shares
    */
   updateShares(id: string, shares: Array<{ userId: string; permission: "editor" | "viewer" }>): boolean {
+    // Validate all user IDs before storing
+    for (const share of shares) {
+      if (!this.validateUserId(share.userId)) {
+        console.error(`[db] Invalid userId in share: ${share.userId?.slice(0, 50)}`);
+        return false;
+      }
+    }
+
     const result = db.run(
       `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
       [JSON.stringify(shares), new Date().toISOString(), id]
@@ -955,6 +984,12 @@ export const storage = {
    * Add a share to a diagram
    */
   addShare(id: string, userId: string, permission: "editor" | "viewer"): boolean {
+    // Validate userId before any operation
+    if (!this.validateUserId(userId)) {
+      console.error(`[db] Invalid userId for addShare: ${userId?.slice(0, 50)}`);
+      return false;
+    }
+
     const diagram = this.getDiagram(id);
     if (!diagram) return false;
 
@@ -970,6 +1005,12 @@ export const storage = {
    * Remove a share from a diagram
    */
   removeShare(id: string, userId: string): boolean {
+    // Validate userId before any operation
+    if (!this.validateUserId(userId)) {
+      console.error(`[db] Invalid userId for removeShare: ${userId?.slice(0, 50)}`);
+      return false;
+    }
+
     const diagram = this.getDiagram(id);
     if (!diagram) return false;
 

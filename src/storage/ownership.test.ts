@@ -284,4 +284,99 @@ describe("Ownership", () => {
       }
     });
   });
+
+  describe("userId validation in share operations", () => {
+    it("validateUserId accepts valid user IDs", () => {
+      expect(storage.validateUserId("user-123")).toBe(true);
+      expect(storage.validateUserId("abc")).toBe(true);
+      expect(storage.validateUserId("user_name")).toBe(true);
+      expect(storage.validateUserId("user@example.com")).toBe(true);
+      expect(storage.validateUserId("user.name")).toBe(true);
+      expect(storage.validateUserId("a".repeat(255))).toBe(true);
+    });
+
+    it("validateUserId rejects empty or null user IDs", () => {
+      expect(storage.validateUserId("")).toBe(false);
+      expect(storage.validateUserId(null as any)).toBe(false);
+      expect(storage.validateUserId(undefined as any)).toBe(false);
+    });
+
+    it("validateUserId rejects oversized user IDs", () => {
+      expect(storage.validateUserId("a".repeat(256))).toBe(false);
+      expect(storage.validateUserId("a".repeat(1000))).toBe(false);
+    });
+
+    it("validateUserId rejects special characters that could cause injection", () => {
+      // JSON injection attempts
+      expect(storage.validateUserId('user","permission":"owner')).toBe(false);
+      expect(storage.validateUserId('user"}],"evil":[{"x":"')).toBe(false);
+
+      // SQL injection attempts
+      expect(storage.validateUserId("user'; DROP TABLE--")).toBe(false);
+      expect(storage.validateUserId("user' OR '1'='1")).toBe(false);
+
+      // XSS attempts
+      expect(storage.validateUserId("<script>alert(1)</script>")).toBe(false);
+      expect(storage.validateUserId("user\"><script>")).toBe(false);
+
+      // Path traversal
+      expect(storage.validateUserId("../../../etc/passwd")).toBe(false);
+
+      // Newlines and control chars
+      expect(storage.validateUserId("user\nname")).toBe(false);
+      expect(storage.validateUserId("user\x00name")).toBe(false);
+    });
+
+    it("addShare rejects invalid user IDs", () => {
+      const diagram = storage.createDiagram("Test", "test-project", testSpec, {
+        ownerId: "user-1",
+      });
+      testIds.push(diagram.id);
+
+      // Should return false for invalid userIds
+      expect(storage.addShare(diagram.id, "", "editor")).toBe(false);
+      expect(storage.addShare(diagram.id, 'user","evil":"x', "editor")).toBe(false);
+
+      // Verify no shares were added
+      const updated = storage.getDiagram(diagram.id);
+      expect(updated!.shares).toHaveLength(0);
+    });
+
+    it("removeShare rejects invalid user IDs", () => {
+      const diagram = storage.createDiagram("Test", "test-project", testSpec, {
+        ownerId: "user-1",
+      });
+      testIds.push(diagram.id);
+
+      // Add a valid share first
+      storage.addShare(diagram.id, "user-2", "editor");
+
+      // Try to remove with invalid userId - should fail
+      expect(storage.removeShare(diagram.id, "")).toBe(false);
+      expect(storage.removeShare(diagram.id, '<script>')).toBe(false);
+
+      // Verify original share still exists
+      const updated = storage.getDiagram(diagram.id);
+      expect(updated!.shares).toHaveLength(1);
+    });
+
+    it("updateShares rejects any invalid user IDs in the array", () => {
+      const diagram = storage.createDiagram("Test", "test-project", testSpec, {
+        ownerId: "user-1",
+      });
+      testIds.push(diagram.id);
+
+      // Even one bad userId should reject the whole update
+      const result = storage.updateShares(diagram.id, [
+        { userId: "valid-user", permission: "editor" },
+        { userId: 'invalid","evil', permission: "viewer" },
+      ]);
+
+      expect(result).toBe(false);
+
+      // Verify no shares were set
+      const updated = storage.getDiagram(diagram.id);
+      expect(updated!.shares).toHaveLength(0);
+    });
+  });
 });
