@@ -103,6 +103,7 @@ export interface Diagram {
   project: string;
   spec: DiagramSpec;
   thumbnailUrl?: string;
+  version: number; // For optimistic locking
   createdAt: string;
   updatedAt: string;
 }

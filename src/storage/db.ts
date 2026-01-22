@@ -48,10 +48,19 @@ db.run(`
     project TEXT NOT NULL,
     spec TEXT NOT NULL,
     thumbnail_url TEXT,
+    version INTEGER DEFAULT 1,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+// Migration: Add version column if it doesn't exist (for existing databases)
+try {
+  db.run(`ALTER TABLE diagrams ADD COLUMN version INTEGER DEFAULT 1`);
+  console.log("[db] Added version column to diagrams table");
+} catch {
+  // Column already exists, ignore error
+}
 
 db.run(`
   CREATE TABLE IF NOT EXISTS diagram_versions (
@@ -102,10 +111,11 @@ export const storage = {
   createDiagram(name: string, project: string, spec: DiagramSpec): Diagram {
     const id = nanoid(12);
     const now = new Date().toISOString();
+    const version = 1;
 
     db.run(
-      `INSERT INTO diagrams (id, name, project, spec, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, name, project, JSON.stringify(spec), now, now]
+      `INSERT INTO diagrams (id, name, project, spec, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, name, project, JSON.stringify(spec), version, now, now]
     );
 
     // Create initial version
@@ -116,13 +126,14 @@ export const storage = {
       name,
       project,
       spec,
+      version,
       createdAt: now,
       updatedAt: now,
     };
   },
 
   getDiagram(id: string): Diagram | null {
-    const row = db.query<{ id: string; name: string; project: string; spec: string; thumbnail_url: string | null; created_at: string; updated_at: string }, [string]>(
+    const row = db.query<{ id: string; name: string; project: string; spec: string; thumbnail_url: string | null; version: number; created_at: string; updated_at: string }, [string]>(
       `SELECT * FROM diagrams WHERE id = ?`
     ).get(id);
 
@@ -134,28 +145,70 @@ export const storage = {
       project: row.project,
       spec: JSON.parse(row.spec),
       thumbnailUrl: row.thumbnail_url || undefined,
+      version: row.version ?? 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   },
 
-  updateDiagram(id: string, spec: DiagramSpec, message?: string): Diagram | null {
+  /**
+   * Update diagram with optional optimistic locking
+   * @param id - Diagram ID
+   * @param spec - New diagram spec
+   * @param message - Optional version message
+   * @param baseVersion - Optional version to check for optimistic locking
+   * @returns Updated diagram, null if not found, or { conflict: true, currentVersion: number } if version mismatch
+   */
+  updateDiagram(
+    id: string,
+    spec: DiagramSpec,
+    message?: string,
+    baseVersion?: number
+  ): Diagram | null | { conflict: true; currentVersion: number } {
     const now = new Date().toISOString();
 
-    const result = db.run(
-      `UPDATE diagrams SET spec = ?, updated_at = ? WHERE id = ?`,
-      [JSON.stringify(spec), now, id]
-    );
+    // If baseVersion is provided, use optimistic locking
+    if (baseVersion !== undefined) {
+      const result = db.run(
+        `UPDATE diagrams SET spec = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ?`,
+        [JSON.stringify(spec), now, id, baseVersion]
+      );
 
-    // Only create version if the diagram actually exists (update affected rows)
-    if (result.changes === 0) {
-      return null;
+      // No rows affected - either diagram doesn't exist or version mismatch
+      if (result.changes === 0) {
+        // Check if diagram exists to differentiate between not found and conflict
+        const existing = this.getDiagram(id);
+        if (!existing) {
+          return null;
+        }
+        // Version mismatch - return conflict
+        return { conflict: true, currentVersion: existing.version };
+      }
+    } else {
+      // No optimistic locking - just update (backwards compatible)
+      const result = db.run(
+        `UPDATE diagrams SET spec = ?, version = version + 1, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(spec), now, id]
+      );
+
+      // Only create version if the diagram actually exists (update affected rows)
+      if (result.changes === 0) {
+        return null;
+      }
     }
 
     // Create new version
     this.createVersion(id, spec, message);
 
     return this.getDiagram(id);
+  },
+
+  /**
+   * Force update diagram without version check (admin operation)
+   * Use with caution - can overwrite concurrent changes
+   */
+  forceUpdateDiagram(id: string, spec: DiagramSpec, message?: string): Diagram | null {
+    return this.updateDiagram(id, spec, message) as Diagram | null;
   },
 
   async deleteDiagram(id: string): Promise<boolean> {

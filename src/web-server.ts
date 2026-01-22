@@ -303,7 +303,7 @@ app.get("/api/diagrams", (c) => {
   }
 });
 
-// Get diagram with caching
+// Get diagram with caching and version-based ETag for optimistic locking
 app.get("/api/diagrams/:id", (c) => {
   try {
     const id = c.req.param("id");
@@ -313,10 +313,11 @@ app.get("/api/diagrams/:id", (c) => {
 
     // Check cache
     const cacheKey = `diagram:${id}`;
-    const cached = diagramCache.get(cacheKey);
+    const cached = diagramCache.get(cacheKey) as (typeof response) | undefined;
     if (cached) {
-      const etag = generateETag(cached);
-      if (matchesETag(c.req.header("If-None-Match"), etag)) {
+      // Use version-based ETag for optimistic locking support
+      const etag = `"v${cached.version}"`;
+      if (c.req.header("If-None-Match") === etag) {
         return new Response(null, { status: 304 });
       }
       c.header("ETag", etag);
@@ -339,7 +340,9 @@ app.get("/api/diagrams/:id", (c) => {
 
     // Cache the response
     diagramCache.set(cacheKey, response);
-    const etag = generateETag(response);
+    // Use version-based ETag for optimistic locking support
+    // Clients can pass this ETag value in If-Match header when updating
+    const etag = `"v${diagram.version}"`;
     c.header("ETag", etag);
     c.header("X-Cache", "MISS");
     c.header("Cache-Control", "private, max-age=60");
@@ -381,7 +384,8 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
   }
 });
 
-// Update diagram (body size limited)
+// Update diagram with optimistic locking support (body size limited)
+// Supports If-Match header for version checking - returns 409 Conflict if versions don't match
 app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
   try {
     const id = c.req.param("id");
@@ -391,20 +395,52 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
       return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
     }
 
-    if (!storage.getDiagram(id)) {
+    // Check If-Match header for optimistic locking
+    const ifMatch = c.req.header("If-Match");
+    let baseVersion: number | undefined;
+
+    if (ifMatch) {
+      // Parse version from ETag format: "v{version}" or just the version number
+      const versionMatch = ifMatch.replace(/"/g, "").match(/^v?(\d+)$/);
+      if (!versionMatch) {
+        return c.json({
+          error: true,
+          message: "Invalid If-Match header format. Expected \"v{version}\" or \"{version}\"",
+          code: "INVALID_IF_MATCH"
+        }, 400);
+      }
+      baseVersion = parseInt(versionMatch[1], 10);
+    }
+
+    // Perform update with optional optimistic locking
+    const result = storage.updateDiagram(id, body.spec, body.message, baseVersion);
+
+    // Handle not found
+    if (result === null) {
       return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
     }
 
-    const updated = storage.updateDiagram(id, body.spec, body.message);
+    // Handle version conflict
+    if (typeof result === "object" && "conflict" in result) {
+      return c.json({
+        error: true,
+        message: `Version conflict: expected version ${baseVersion}, but current version is ${result.currentVersion}`,
+        code: "VERSION_CONFLICT",
+        currentVersion: result.currentVersion
+      }, 409);
+    }
 
-    // Invalidate caches for this diagram
+    // Success - invalidate caches
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
 
     // Broadcast update to collaborators
     broadcastDiagramSync(id, body.spec);
 
-    return c.json(updated);
+    // Set ETag header with new version for subsequent requests
+    c.header("ETag", `"v${result.version}"`);
+
+    return c.json(result);
   } catch (err) {
     console.error("PUT /api/diagrams/:id error:", err);
     if (err instanceof SyntaxError) {
