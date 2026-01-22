@@ -46,6 +46,8 @@ interface ConnectionState {
 class RoomManager {
   private rooms = new Map<string, Room>();
   private connections = new Map<WebSocketConnection, ConnectionState>();
+  /** Reverse index: diagramId → Set of connections in that room (for O(1) broadcast) */
+  private roomConnections = new Map<string, Set<WebSocketConnection>>();
   private colorIndex = 0;
 
   /**
@@ -151,6 +153,14 @@ class RoomManager {
     room.participants.set(participant.id, participant);
     state.diagramId = diagramId;
 
+    // Add to room connections index for O(1) broadcast lookup
+    let roomConns = this.roomConnections.get(diagramId);
+    if (!roomConns) {
+      roomConns = new Set();
+      this.roomConnections.set(diagramId, roomConns);
+    }
+    roomConns.add(ws);
+
     // Notify joiner
     const roomState: RoomState = {
       diagramId,
@@ -180,6 +190,15 @@ class RoomManager {
 
     // Remove participant
     room.participants.delete(state.participantId);
+
+    // Remove from room connections index
+    const roomConns = this.roomConnections.get(state.diagramId);
+    if (roomConns) {
+      roomConns.delete(ws);
+      if (roomConns.size === 0) {
+        this.roomConnections.delete(state.diagramId);
+      }
+    }
 
     // Notify others
     this.broadcastToRoom(state.diagramId, {
@@ -587,10 +606,14 @@ class RoomManager {
   }
 
   private broadcastToRoom(diagramId: string, message: ServerMessage, exclude?: WebSocketConnection): void {
+    // Use roomConnections index for O(room_size) instead of O(total_connections)
+    const roomConns = this.roomConnections.get(diagramId);
+    if (!roomConns || roomConns.size === 0) return;
+
     const messageStr = JSON.stringify(message);
 
-    for (const [ws, state] of this.connections) {
-      if (state.diagramId === diagramId && ws !== exclude && ws.readyState === 1) {
+    for (const ws of roomConns) {
+      if (ws !== exclude && ws.readyState === 1) {
         ws.send(messageStr);
       }
     }
