@@ -17,6 +17,8 @@ interface CacheOptions {
   maxEntries?: number;
   maxSizeBytes?: number;
   ttlMs?: number;
+  /** Percentage of entries to evict at once (0.1 = 10%). Higher = less frequent evictions. */
+  evictionBatchPercent?: number;
 }
 
 export class LRUCache<T> {
@@ -24,14 +26,18 @@ export class LRUCache<T> {
   private maxEntries: number;
   private maxSizeBytes: number;
   private ttlMs: number;
+  private evictionBatchPercent: number;
   private currentSizeBytes = 0;
   private hits = 0;
   private misses = 0;
+  private evictions = 0;
 
   constructor(options: CacheOptions = {}) {
     this.maxEntries = options.maxEntries ?? 1000;
     this.maxSizeBytes = options.maxSizeBytes ?? 50 * 1024 * 1024; // 50MB default
     this.ttlMs = options.ttlMs ?? 5 * 60 * 1000; // 5 minutes default
+    // Batch eviction: evict 10% of entries at once to reduce O(n) iterations
+    this.evictionBatchPercent = options.evictionBatchPercent ?? 0.1;
   }
 
   get(key: string): T | undefined {
@@ -61,17 +67,15 @@ export class LRUCache<T> {
     // Estimate size if not provided
     const size = sizeBytes ?? this.estimateSize(value);
 
-    // Evict if necessary
-    while (
-      (this.cache.size >= this.maxEntries || this.currentSizeBytes + size > this.maxSizeBytes) &&
-      this.cache.size > 0
-    ) {
-      this.evictLRU();
-    }
-
-    // Delete existing entry if present
+    // Delete existing entry if present (before checking limits)
     if (this.cache.has(key)) {
       this.delete(key);
+    }
+
+    // Batch eviction: evict multiple entries at once to reduce O(n) iterations
+    // This changes amortized cost from O(n) per insert to O(1) per insert
+    if (this.cache.size >= this.maxEntries || this.currentSizeBytes + size > this.maxSizeBytes) {
+      this.evictBatch();
     }
 
     const entry: CacheEntry<T> = {
@@ -127,6 +131,7 @@ export class LRUCache<T> {
     hits: number;
     misses: number;
     hitRate: number;
+    evictions: number;
   } {
     const total = this.hits + this.misses;
     return {
@@ -135,24 +140,38 @@ export class LRUCache<T> {
       hits: this.hits,
       misses: this.misses,
       hitRate: total > 0 ? this.hits / total : 0,
+      evictions: this.evictions,
     };
   }
 
-  private evictLRU(): void {
-    let lruKey: string | null = null;
-    let lruScore = Infinity;
+  /**
+   * Evict a batch of LRU entries at once.
+   * This is more efficient than evicting one at a time because we do
+   * one O(n) pass to find the bottom X% instead of O(n) per eviction.
+   */
+  private evictBatch(): void {
+    const size = this.cache.size;
+    if (size === 0) return;
 
+    // Calculate how many to evict (at least 1)
+    const toEvict = Math.max(1, Math.floor(size * this.evictionBatchPercent));
+
+    // Score all entries in one pass - O(n)
+    const scored: Array<{ key: string; score: number }> = [];
     for (const [key, entry] of this.cache) {
       // LRU score: lower is older/less accessed
       const score = entry.lastAccess + entry.accessCount * 1000;
-      if (score < lruScore) {
-        lruScore = score;
-        lruKey = key;
-      }
+      scored.push({ key, score });
     }
 
-    if (lruKey) {
-      this.delete(lruKey);
+    // Partial sort to find the lowest-scored entries
+    // For small batches, this is faster than full sort
+    scored.sort((a, b) => a.score - b.score);
+
+    // Evict the lowest-scored entries
+    for (let i = 0; i < toEvict && i < scored.length; i++) {
+      this.delete(scored[i].key);
+      this.evictions++;
     }
   }
 

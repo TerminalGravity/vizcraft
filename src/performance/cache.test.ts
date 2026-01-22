@@ -90,6 +90,48 @@ describe("LRUCache", () => {
     expect(stats.hitRate).toBeCloseTo(0.667, 2);
   });
 
+  it("tracks evictions in stats", () => {
+    // Fill cache to capacity
+    cache.set("a", "1");
+    cache.set("b", "2");
+    cache.set("c", "3");
+
+    // This should trigger eviction
+    cache.set("d", "4");
+
+    const stats = cache.getStats();
+    expect(stats.evictions).toBeGreaterThan(0);
+  });
+
+  it("batch evicts multiple entries when configured", () => {
+    // Create cache with 50% batch eviction for easier testing
+    const batchCache = new LRUCache<string>({
+      maxEntries: 10,
+      ttlMs: 60000,
+      evictionBatchPercent: 0.5,
+    });
+
+    // Fill cache to capacity
+    for (let i = 0; i < 10; i++) {
+      batchCache.set(`key${i}`, `value${i}`);
+    }
+
+    // Access some keys to make them "hot"
+    batchCache.get("key8");
+    batchCache.get("key9");
+
+    // Add one more to trigger batch eviction (should evict 5 entries)
+    batchCache.set("key10", "value10");
+
+    const stats = batchCache.getStats();
+    // With 50% eviction, should have evicted 5 entries
+    expect(stats.evictions).toBe(5);
+    // Hot keys should still exist
+    expect(batchCache.get("key8")).toBe("value8");
+    expect(batchCache.get("key9")).toBe("value9");
+    expect(batchCache.get("key10")).toBe("value10");
+  });
+
   it("checks existence with has()", () => {
     cache.set("key", "value");
     expect(cache.has("key")).toBe(true);
