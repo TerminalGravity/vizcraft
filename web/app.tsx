@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import { Tldraw, createTLStore, defaultShapeUtils } from "tldraw";
+import { Tldraw, createTLStore, defaultShapeUtils, toRichText } from "tldraw";
 import { jsPDF } from "jspdf";
 import "tldraw/tldraw.css";
 import "./styles.css";
@@ -295,6 +295,7 @@ function Sidebar({
   agents,
   onRunAgent,
   runningAgent,
+  isOpen,
 }: {
   projects: Project[];
   selectedDiagram: string | null;
@@ -514,9 +515,26 @@ function Canvas({
                 geo: node.type === "diamond" ? "diamond" : node.type === "circle" ? "ellipse" : "rectangle",
                 w: 150,
                 h: 80,
-                text: node.label,
                 color: "light-blue",
                 fill: "solid",
+              },
+            });
+
+            // Add label as separate text shape
+            shapes.push({
+              id: `shape:${node.id}-label`,
+              type: "text",
+              x: x + 10,
+              y: y + 30,
+              props: {
+                richText: toRichText(node.label),
+                color: "black",
+                size: "m",
+                font: "sans",
+                autoSize: true,
+                scale: 1,
+                textAlign: "middle",
+                w: 130,
               },
             });
           });
@@ -532,11 +550,32 @@ function Canvas({
                 x: from.x + 75,
                 y: from.y + 40,
                 props: {
-                  start: { type: "point", x: 0, y: 0 },
-                  end: { type: "point", x: to.x - from.x, y: to.y - from.y },
-                  text: edge.label || "",
+                  start: { x: 0, y: 0 },
+                  end: { x: to.x - from.x, y: to.y - from.y },
                 },
               });
+
+              // Add edge label as separate text if provided
+              if (edge.label) {
+                const midX = (from.x + to.x) / 2 + 75;
+                const midY = (from.y + to.y) / 2 + 20;
+                shapes.push({
+                  id: `shape:edge-${i}-label`,
+                  type: "text",
+                  x: midX,
+                  y: midY,
+                  props: {
+                    richText: toRichText(edge.label),
+                    color: "grey",
+                    size: "s",
+                    font: "sans",
+                    autoSize: true,
+                    scale: 1,
+                    textAlign: "middle",
+                    w: 80,
+                  },
+                });
+              }
             }
           });
 
