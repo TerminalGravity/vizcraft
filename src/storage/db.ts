@@ -214,6 +214,10 @@ export const storage = {
     sortOrder?: "asc" | "desc";
     search?: string;
     types?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
+    updatedAfter?: string;
+    updatedBefore?: string;
   } = {}): { data: Diagram[]; total: number } {
     const {
       project,
@@ -223,6 +227,10 @@ export const storage = {
       sortOrder = "desc",
       search,
       types,
+      createdAfter,
+      createdBefore,
+      updatedAfter,
+      updatedBefore,
     } = options;
 
     // Build WHERE conditions
@@ -245,6 +253,24 @@ export const storage = {
       const typePlaceholders = types.map(() => "?").join(", ");
       conditions.push(`json_extract(spec, '$.type') IN (${typePlaceholders})`);
       params.push(...types);
+    }
+
+    // Date range filters - SQLite stores ISO timestamps as TEXT which sort lexicographically
+    if (createdAfter) {
+      conditions.push("created_at >= ?");
+      params.push(createdAfter);
+    }
+    if (createdBefore) {
+      conditions.push("created_at <= ?");
+      params.push(createdBefore);
+    }
+    if (updatedAfter) {
+      conditions.push("updated_at >= ?");
+      params.push(updatedAfter);
+    }
+    if (updatedBefore) {
+      conditions.push("updated_at <= ?");
+      params.push(updatedBefore);
     }
 
     const whereClause = conditions.length > 0

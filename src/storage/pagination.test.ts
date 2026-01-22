@@ -328,6 +328,178 @@ describe("SQL-Level Pagination", () => {
     });
   });
 
+  describe("Date Range Filtering", () => {
+    it("filters by createdAfter", () => {
+      // Get the first diagram's created_at as reference
+      const allDiagrams = storage.listDiagramsPaginated({
+        project: testProject,
+        limit: 25,
+        sortBy: "createdAt",
+        sortOrder: "asc",
+      });
+
+      // Use the middle diagram's timestamp
+      const midIndex = Math.floor(allDiagrams.data.length / 2);
+      const midTimestamp = allDiagrams.data[midIndex].createdAt;
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        createdAfter: midTimestamp,
+        limit: 25,
+      });
+
+      // Should return diagrams created at or after the middle timestamp
+      for (const diagram of result.data) {
+        expect(new Date(diagram.createdAt).getTime()).toBeGreaterThanOrEqual(
+          new Date(midTimestamp).getTime()
+        );
+      }
+    });
+
+    it("filters by createdBefore", () => {
+      const allDiagrams = storage.listDiagramsPaginated({
+        project: testProject,
+        limit: 25,
+        sortBy: "createdAt",
+        sortOrder: "asc",
+      });
+
+      // Use the middle diagram's timestamp
+      const midIndex = Math.floor(allDiagrams.data.length / 2);
+      const midTimestamp = allDiagrams.data[midIndex].createdAt;
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        createdBefore: midTimestamp,
+        limit: 25,
+      });
+
+      // Should return diagrams created at or before the middle timestamp
+      for (const diagram of result.data) {
+        expect(new Date(diagram.createdAt).getTime()).toBeLessThanOrEqual(
+          new Date(midTimestamp).getTime()
+        );
+      }
+    });
+
+    it("filters by date range (createdAfter and createdBefore)", () => {
+      const allDiagrams = storage.listDiagramsPaginated({
+        project: testProject,
+        limit: 25,
+        sortBy: "createdAt",
+        sortOrder: "asc",
+      });
+
+      // Get timestamps from first quarter and third quarter
+      const quarterIndex = Math.floor(allDiagrams.data.length / 4);
+      const startTimestamp = allDiagrams.data[quarterIndex].createdAt;
+      const endTimestamp = allDiagrams.data[quarterIndex * 3].createdAt;
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        createdAfter: startTimestamp,
+        createdBefore: endTimestamp,
+        limit: 25,
+      });
+
+      // Should return diagrams within the range
+      for (const diagram of result.data) {
+        const createdTime = new Date(diagram.createdAt).getTime();
+        expect(createdTime).toBeGreaterThanOrEqual(new Date(startTimestamp).getTime());
+        expect(createdTime).toBeLessThanOrEqual(new Date(endTimestamp).getTime());
+      }
+    });
+
+    it("filters by updatedAfter", () => {
+      const allDiagrams = storage.listDiagramsPaginated({
+        project: testProject,
+        limit: 25,
+        sortBy: "updatedAt",
+        sortOrder: "asc",
+      });
+
+      const midIndex = Math.floor(allDiagrams.data.length / 2);
+      const midTimestamp = allDiagrams.data[midIndex].updatedAt;
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        updatedAfter: midTimestamp,
+        limit: 25,
+      });
+
+      for (const diagram of result.data) {
+        expect(new Date(diagram.updatedAt).getTime()).toBeGreaterThanOrEqual(
+          new Date(midTimestamp).getTime()
+        );
+      }
+    });
+
+    it("filters by updatedBefore", () => {
+      const allDiagrams = storage.listDiagramsPaginated({
+        project: testProject,
+        limit: 25,
+        sortBy: "updatedAt",
+        sortOrder: "asc",
+      });
+
+      const midIndex = Math.floor(allDiagrams.data.length / 2);
+      const midTimestamp = allDiagrams.data[midIndex].updatedAt;
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        updatedBefore: midTimestamp,
+        limit: 25,
+      });
+
+      for (const diagram of result.data) {
+        expect(new Date(diagram.updatedAt).getTime()).toBeLessThanOrEqual(
+          new Date(midTimestamp).getTime()
+        );
+      }
+    });
+
+    it("returns empty when date range has no matches", () => {
+      // Use a future date that no diagrams could have
+      const futureDate = new Date(Date.now() + 86400000 * 365).toISOString(); // 1 year in future
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        createdAfter: futureDate,
+      });
+
+      expect(result.data.length).toBe(0);
+      expect(result.total).toBe(0);
+    });
+
+    it("combines date filter with search and type", () => {
+      const allDiagrams = storage.listDiagramsPaginated({
+        project: testProject,
+        limit: 25,
+        sortBy: "createdAt",
+        sortOrder: "asc",
+      });
+
+      const midTimestamp = allDiagrams.data[Math.floor(allDiagrams.data.length / 2)].createdAt;
+
+      const result = storage.listDiagramsPaginated({
+        project: testProject,
+        search: "Diagram",
+        types: ["flowchart"],
+        createdAfter: midTimestamp,
+        limit: 25,
+      });
+
+      // Verify all filters are applied
+      for (const diagram of result.data) {
+        expect(diagram.name.toLowerCase()).toContain("diagram");
+        expect(diagram.spec.type).toBe("flowchart");
+        expect(new Date(diagram.createdAt).getTime()).toBeGreaterThanOrEqual(
+          new Date(midTimestamp).getTime()
+        );
+      }
+    });
+  });
+
   describe("Edge Cases", () => {
     it("handles limit of 0", () => {
       const result = storage.listDiagramsPaginated({

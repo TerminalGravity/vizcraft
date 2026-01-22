@@ -200,13 +200,19 @@ app.get("/api/diagrams", (c) => {
     const typesParam = c.req.query("types"); // Comma-separated: "flowchart,architecture"
     const minimal = c.req.query("minimal") === "true";
 
+    // Date range filters (ISO 8601 format: YYYY-MM-DD or full timestamp)
+    const createdAfter = c.req.query("createdAfter");
+    const createdBefore = c.req.query("createdBefore");
+    const updatedAfter = c.req.query("updatedAfter");
+    const updatedBefore = c.req.query("updatedBefore");
+
     // Validate and parse parameters
     const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100) : 50;
     const offset = offsetParam ? Math.max(parseInt(offsetParam, 10), 0) : 0;
     const types = typesParam ? typesParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
 
-    // Build cache key from all parameters
-    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${minimal}`;
+    // Build cache key from all parameters (including date filters)
+    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${createdAfter || ""}:${createdBefore || ""}:${updatedAfter || ""}:${updatedBefore || ""}:${minimal}`;
     const cached = listCache.get(cacheKey);
     if (cached) {
       const etag = generateETag(cached);
@@ -227,6 +233,10 @@ app.get("/api/diagrams", (c) => {
       sortOrder,
       search,
       types,
+      createdAfter,
+      createdBefore,
+      updatedAfter,
+      updatedBefore,
     });
 
     const projects = storage.listProjects();
@@ -251,13 +261,17 @@ app.get("/api/diagrams", (c) => {
         nextOffset: hasNextPage ? offset + limit : null,
         prevOffset: hasPrevPage ? Math.max(offset - limit, 0) : null,
       },
-      // Query parameters echoed back
-      query: {
+      // Query parameters echoed back (filters applied)
+      filters: {
         project: project || null,
         sortBy: sortBy || "updatedAt",
         sortOrder: sortOrder || "desc",
         search: search || null,
         types: types || null,
+        createdAfter: createdAfter || null,
+        createdBefore: createdBefore || null,
+        updatedAfter: updatedAfter || null,
+        updatedBefore: updatedBefore || null,
       },
       diagrams: diagrams.map((d) => ({
         id: d.id,
