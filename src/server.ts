@@ -308,10 +308,15 @@ server.tool(
 
     const { spec } = diagram;
     const nodeLabels = spec.nodes.map((n) => n.label).join(", ");
+
+    // Build node lookup map for O(1) lookups instead of O(n) find() calls
+    // This improves edge description from O(edges × nodes) to O(edges + nodes)
+    const nodeMap = new Map(spec.nodes.map((n) => [n.id, n]));
+
     const edgeDescriptions = spec.edges
       .map((e) => {
-        const fromNode = spec.nodes.find((n) => n.id === e.from);
-        const toNode = spec.nodes.find((n) => n.id === e.to);
+        const fromNode = nodeMap.get(e.from);
+        const toNode = nodeMap.get(e.to);
         return `${fromNode?.label || e.from} → ${toNode?.label || e.to}${e.label ? ` (${e.label})` : ""}`;
       })
       .join("; ");
