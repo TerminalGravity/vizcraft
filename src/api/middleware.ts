@@ -66,13 +66,33 @@ export function validationError(c: Context, message: string) {
 // ==================== Validation Helpers ====================
 
 /**
+ * Nanoid format: URL-safe alphabet (A-Za-z0-9_-)
+ * Default length is 12, but we allow 8-21 for flexibility
+ * Pattern: /^[A-Za-z0-9_-]{8,21}$/
+ */
+const NANOID_PATTERN = /^[A-Za-z0-9_-]{8,21}$/;
+
+/**
  * Validate required ID from URL params
+ * Enforces nanoid format to prevent injection attacks
  */
 export function validateId(id: string | undefined, name = "ID"): string {
   if (!id?.trim()) {
     throw new APIError("INVALID_ID", `${name} is required`, 400);
   }
-  return id.trim();
+
+  const trimmed = id.trim();
+
+  // Validate nanoid format (URL-safe characters only)
+  if (!NANOID_PATTERN.test(trimmed)) {
+    throw new APIError(
+      "INVALID_ID",
+      `${name} must be 8-21 characters using only letters, numbers, underscore, or hyphen`,
+      400
+    );
+  }
+
+  return trimmed;
 }
 
 /**

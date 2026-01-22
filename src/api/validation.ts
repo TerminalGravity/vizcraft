@@ -205,7 +205,28 @@ export function validateRequest<B extends ZodSchema, P extends ZodSchema>(config
 // ============================================
 
 /**
+ * Nanoid format validation (URL-safe characters: A-Za-z0-9_-)
+ * Default length is 12 but we allow 8-21 for flexibility
+ */
+export const nanoidSchema = z
+  .string()
+  .min(8, "ID must be at least 8 characters")
+  .max(21, "ID must be at most 21 characters")
+  .regex(
+    /^[A-Za-z0-9_-]+$/,
+    "ID must contain only letters, numbers, underscores, or hyphens"
+  );
+
+/**
+ * Diagram ID path parameter schema (nanoid format)
+ */
+export const diagramIdParamSchema = z.object({
+  id: nanoidSchema,
+});
+
+/**
  * UUID path parameter schema
+ * @deprecated Use diagramIdParamSchema for diagram IDs (which use nanoid, not UUID)
  */
 export const uuidParamSchema = z.object({
   id: z.string().uuid("Invalid UUID format"),
@@ -311,16 +332,19 @@ export const updateDiagramSchema = z.object({
 });
 
 /**
- * Version parameter schema
+ * Version parameter schema (for /diagrams/:id/versions/:version routes)
  */
 export const versionParamSchema = z.object({
-  id: z.string().uuid("Invalid diagram UUID"),
+  id: nanoidSchema,
   version: z.coerce.number().int().min(1),
 });
 
 // Export type helpers
+export type DiagramIdParams = z.infer<typeof diagramIdParamSchema>;
+/** @deprecated Use DiagramIdParams instead */
 export type UuidParams = z.infer<typeof uuidParamSchema>;
 export type PaginationQuery = z.infer<typeof paginationSchema>;
 export type SortingQuery = z.infer<typeof sortingSchema>;
 export type CreateDiagramBody = z.infer<typeof createDiagramSchema>;
 export type UpdateDiagramBody = z.infer<typeof updateDiagramSchema>;
+export type VersionParams = z.infer<typeof versionParamSchema>;

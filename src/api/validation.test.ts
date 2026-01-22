@@ -11,6 +11,8 @@ import {
   validateParams,
   validateRequest,
   uuidParamSchema,
+  nanoidSchema,
+  diagramIdParamSchema,
   paginationSchema,
   diagramSpecSchema,
   createDiagramSchema,
@@ -205,6 +207,47 @@ describe("paginationSchema", () => {
   test("enforces limits", () => {
     expect(() => paginationSchema.parse({ page: "0" })).toThrow();
     expect(() => paginationSchema.parse({ limit: "500" })).toThrow();
+  });
+});
+
+describe("nanoidSchema", () => {
+  test("accepts valid nanoid format", () => {
+    // Standard 12-char nanoid
+    expect(nanoidSchema.parse("V1StGXR8_Z5j")).toBe("V1StGXR8_Z5j");
+    // 8 characters (minimum)
+    expect(nanoidSchema.parse("abcd1234")).toBe("abcd1234");
+    // 21 characters (maximum)
+    expect(nanoidSchema.parse("abcdefghij12345678901")).toBe("abcdefghij12345678901");
+    // With underscore and hyphen
+    expect(nanoidSchema.parse("test_id-abc")).toBe("test_id-abc");
+  });
+
+  test("rejects ID that is too short", () => {
+    expect(() => nanoidSchema.parse("abc1234")).toThrow(); // 7 chars
+    expect(() => nanoidSchema.parse("short")).toThrow();
+  });
+
+  test("rejects ID that is too long", () => {
+    expect(() => nanoidSchema.parse("a".repeat(22))).toThrow();
+  });
+
+  test("rejects invalid characters", () => {
+    expect(() => nanoidSchema.parse("test!@#$%^&*")).toThrow();
+    expect(() => nanoidSchema.parse("../../../etc")).toThrow();
+    expect(() => nanoidSchema.parse("test.with.dots")).toThrow();
+    expect(() => nanoidSchema.parse("has spaces")).toThrow();
+  });
+});
+
+describe("diagramIdParamSchema", () => {
+  test("accepts valid diagram ID", () => {
+    const result = diagramIdParamSchema.parse({ id: "V1StGXR8_Z5j" });
+    expect(result.id).toBe("V1StGXR8_Z5j");
+  });
+
+  test("rejects invalid diagram ID", () => {
+    expect(() => diagramIdParamSchema.parse({ id: "bad!" })).toThrow();
+    expect(() => diagramIdParamSchema.parse({ id: "short" })).toThrow();
   });
 });
 
