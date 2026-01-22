@@ -38,6 +38,11 @@ import {
 } from "./templates";
 import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
+import {
+  withTimeout,
+  TimeoutError,
+  TIMEOUTS,
+} from "./api/timeout";
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -911,7 +916,11 @@ app.post("/api/diagrams/:id/apply-layout", async (c) => {
       padding: body.padding,
     };
 
-    const result = await layoutDiagram(diagram.spec, options);
+    const result = await withTimeout(
+      layoutDiagram(diagram.spec, options),
+      TIMEOUTS.LAYOUT,
+      "Layout calculation"
+    );
 
     if (!result.success) {
       throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
@@ -933,6 +942,9 @@ app.post("/api/diagrams/:id/apply-layout", async (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof TimeoutError) {
+      throw new APIError("LAYOUT_TIMEOUT", err.message, 504);
+    }
     console.error("POST /api/diagrams/:id/apply-layout error:", err);
     throw new APIError("LAYOUT_ERROR", "Failed to apply layout", 500);
   }
@@ -965,7 +977,11 @@ app.post("/api/diagrams/:id/preview-layout", async (c) => {
       padding: body.padding,
     };
 
-    const result = await layoutDiagram(diagram.spec, options);
+    const result = await withTimeout(
+      layoutDiagram(diagram.spec, options),
+      TIMEOUTS.LAYOUT,
+      "Layout preview"
+    );
 
     if (!result.success) {
       throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
@@ -978,6 +994,9 @@ app.post("/api/diagrams/:id/preview-layout", async (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof TimeoutError) {
+      throw new APIError("LAYOUT_TIMEOUT", err.message, 504);
+    }
     console.error("POST /api/diagrams/:id/preview-layout error:", err);
     throw new APIError("LAYOUT_ERROR", "Failed to preview layout", 500);
   }
@@ -1029,7 +1048,11 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
       return c.json({ error: true, message: "Agent not found", code: "AGENT_NOT_FOUND" }, 404);
     }
 
-    const result = await runAgent(agent, diagram.spec);
+    const result = await withTimeout(
+      runAgent(agent, diagram.spec),
+      TIMEOUTS.AGENT,
+      `Agent execution: ${agent.name}`
+    );
 
     if (result.success && result.spec) {
       // Update the diagram with the new spec
@@ -1055,6 +1078,13 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
       code: "AGENT_FAILED",
     }, 400);
   } catch (err) {
+    if (err instanceof TimeoutError) {
+      return c.json({
+        error: true,
+        message: err.message,
+        code: "AGENT_TIMEOUT",
+      }, 504);
+    }
     console.error("POST /api/diagrams/:diagramId/run-agent/:agentId error:", err);
     return c.json({
       error: true,
