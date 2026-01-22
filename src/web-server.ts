@@ -29,7 +29,14 @@ import {
   getCollabStats,
   getRoomInfo,
 } from "./collaboration";
-import type { DiagramSpec } from "./types";
+import {
+  listDiagramTypes,
+  getDiagramTypeInfo,
+  getDiagramTemplate,
+  exportToMermaid,
+  getSupportedExportFormats,
+} from "./templates";
+import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
 
 // Configuration
@@ -716,6 +723,79 @@ app.get("/api/collab/rooms/:diagramId", (c) => {
     if (err instanceof APIError) throw err;
     console.error("GET /api/collab/rooms/:diagramId error:", err);
     return c.json({ error: true, message: "Failed to get room info" }, 500);
+  }
+});
+
+// ==================== Diagram Types Endpoints ====================
+
+// List all diagram types
+app.get("/api/diagram-types", (c) => {
+  try {
+    const types = listDiagramTypes();
+    return c.json({ types, count: types.length });
+  } catch (err) {
+    console.error("GET /api/diagram-types error:", err);
+    return c.json({ error: true, message: "Failed to list diagram types" }, 500);
+  }
+});
+
+// Get info for specific diagram type
+app.get("/api/diagram-types/:type", (c) => {
+  try {
+    const type = c.req.param("type") as DiagramType;
+    const info = getDiagramTypeInfo(type);
+    return c.json(info);
+  } catch (err) {
+    console.error("GET /api/diagram-types/:type error:", err);
+    return c.json({ error: true, message: "Failed to get diagram type info" }, 500);
+  }
+});
+
+// Get starter template for diagram type
+app.get("/api/diagram-types/:type/template", (c) => {
+  try {
+    const type = c.req.param("type") as DiagramType;
+    const template = getDiagramTemplate(type);
+    return c.json({ template });
+  } catch (err) {
+    console.error("GET /api/diagram-types/:type/template error:", err);
+    return c.json({ error: true, message: "Failed to get diagram template" }, 500);
+  }
+});
+
+// Export diagram to Mermaid format
+app.get("/api/diagrams/:id/export/mermaid", (c) => {
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const mermaid = exportToMermaid(diagram.spec);
+
+    // Return as plain text for easy copy/paste
+    c.header("Content-Type", "text/plain");
+    return c.text(mermaid);
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("GET /api/diagrams/:id/export/mermaid error:", err);
+    return c.json({ error: true, message: "Failed to export to Mermaid" }, 500);
+  }
+});
+
+// Get supported export formats
+app.get("/api/export-formats", (c) => {
+  try {
+    const formats = getSupportedExportFormats();
+    return c.json({ formats, count: formats.length });
+  } catch (err) {
+    console.error("GET /api/export-formats error:", err);
+    return c.json({ error: true, message: "Failed to get export formats" }, 500);
   }
 });
 

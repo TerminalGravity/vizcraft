@@ -2,15 +2,37 @@
  * Vizcraft Type Definitions
  */
 
+// Node shapes for different diagram types
+export type NodeShape =
+  // General shapes
+  | "box" | "diamond" | "circle" | "database" | "cloud" | "cylinder"
+  // Sequence diagram shapes
+  | "actor" | "lifeline" | "activation"
+  // ER diagram shapes
+  | "entity" | "attribute" | "relationship" | "weak-entity"
+  // State machine shapes
+  | "state" | "initial" | "final" | "choice" | "fork" | "join"
+  // Class diagram shapes
+  | "class" | "interface" | "abstract" | "enum"
+  // Mind map shapes
+  | "central" | "branch" | "topic"
+  // Network shapes
+  | "server" | "router" | "switch" | "firewall" | "client" | "internet";
+
 export interface DiagramNode {
   id: string;
   label: string;
-  type?: "box" | "diamond" | "circle" | "database" | "cloud" | "cylinder";
+  type?: NodeShape;
   color?: string;
   position?: { x: number; y: number };
   details?: string;
   width?: number;
   height?: number;
+  // Extended properties for specific diagram types
+  stereotype?: string; // UML stereotype <<>>
+  attributes?: string[]; // For class/entity diagrams
+  methods?: string[]; // For class diagrams
+  swimlane?: string; // For sequence diagrams
 }
 
 export interface DiagramEdge {
@@ -29,13 +51,50 @@ export interface DiagramGroup {
   color?: string;
 }
 
+// Sequence diagram message
+export interface SequenceMessage {
+  id?: string;
+  from: string;
+  to: string;
+  label: string;
+  type: "sync" | "async" | "return" | "create" | "destroy";
+  order: number;
+}
+
+// ER diagram relationship with cardinality
+export interface ERRelationship {
+  id?: string;
+  entity1: string;
+  entity2: string;
+  label?: string;
+  cardinality: "1:1" | "1:N" | "N:1" | "N:M";
+  participation1?: "total" | "partial";
+  participation2?: "total" | "partial";
+}
+
+// Supported diagram types
+export type DiagramType =
+  | "flowchart"
+  | "architecture"
+  | "sequence"
+  | "er"
+  | "state"
+  | "class"
+  | "mindmap"
+  | "network"
+  | "freeform";
+
 export interface DiagramSpec {
-  type: "flowchart" | "architecture" | "sequence" | "freeform";
+  type: DiagramType;
   theme?: "dark" | "light" | "professional";
   title?: string;
   nodes: DiagramNode[];
   edges: DiagramEdge[];
   groups?: DiagramGroup[];
+  // Sequence diagram specific
+  messages?: SequenceMessage[];
+  // ER diagram specific
+  relationships?: ERRelationship[];
 }
 
 export interface Diagram {
