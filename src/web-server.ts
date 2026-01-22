@@ -56,6 +56,12 @@ import {
   onShutdown,
 } from "./api/shutdown";
 import { roomManager } from "./collaboration/room-manager";
+import {
+  errorResponse,
+  notFoundResponse,
+  validationErrorResponse,
+  operationResponse,
+} from "./api/responses";
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -143,37 +149,26 @@ app.onError((err, c) => {
   console.error(`[API Error] ${c.req.method} ${c.req.path}:`, err);
 
   if (err instanceof APIError) {
-    return c.json({
-      error: true,
-      message: err.message,
-      code: err.code,
-    }, err.status as 400 | 404 | 500);
+    return errorResponse(c, err.code, err.message, err.status as 400 | 404 | 500);
   }
 
   if (err instanceof SyntaxError) {
-    return c.json({
-      error: true,
-      message: "Invalid JSON in request body",
-      code: "INVALID_JSON",
-    }, 400);
+    return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
   }
 
-  return c.json({
-    error: true,
-    message: "Internal server error",
-    code: "INTERNAL_ERROR",
-    ...(process.env.NODE_ENV === "development" && { details: err.message }),
-  }, 500);
+  const details = process.env.NODE_ENV === "development" ? err.message : undefined;
+  return errorResponse(c, "INTERNAL_ERROR", "Internal server error", 500, details);
 });
 
 // 404 handler for API routes
 app.notFound((c) => {
   if (c.req.path.startsWith("/api")) {
-    return c.json({
-      error: true,
-      message: `API endpoint not found: ${c.req.method} ${c.req.path}`,
-      code: "NOT_FOUND",
-    }, 404);
+    return errorResponse(
+      c,
+      "NOT_FOUND",
+      `API endpoint not found: ${c.req.method} ${c.req.path}`,
+      404
+    );
   }
   return c.text("Not Found", 404);
 });
@@ -380,13 +375,13 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
     const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
 
     if (!body.name?.trim()) {
-      return c.json({ error: true, message: "Name is required", code: "MISSING_NAME" }, 400);
+      return validationErrorResponse(c, "Name is required");
     }
     if (!body.spec) {
-      return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
+      return validationErrorResponse(c, "Spec is required");
     }
     if (!body.spec.type || !body.spec.nodes) {
-      return c.json({ error: true, message: "Spec must have type and nodes", code: "INVALID_SPEC" }, 400);
+      return validationErrorResponse(c, "Spec must have type and nodes");
     }
 
     const diagram = storage.createDiagram(body.name.trim(), body.project?.trim() || "default", body.spec);
@@ -398,9 +393,9 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
   } catch (err) {
     console.error("POST /api/diagrams error:", err);
     if (err instanceof SyntaxError) {
-      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
     }
-    return c.json({ error: true, message: "Failed to create diagram", code: "CREATE_FAILED" }, 500);
+    return errorResponse(c, "CREATE_FAILED", "Failed to create diagram", 500);
   }
 });
 
@@ -412,7 +407,7 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
     const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
 
     if (!body.spec) {
-      return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
+      return validationErrorResponse(c, "Spec is required");
     }
 
     // Check If-Match header for optimistic locking
@@ -423,11 +418,10 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
       // Parse version from ETag format: "v{version}" or just the version number
       const versionMatch = ifMatch.replace(/"/g, "").match(/^v?(\d+)$/);
       if (!versionMatch) {
-        return c.json({
-          error: true,
-          message: "Invalid If-Match header format. Expected \"v{version}\" or \"{version}\"",
-          code: "INVALID_IF_MATCH"
-        }, 400);
+        return validationErrorResponse(
+          c,
+          "Invalid If-Match header format. Expected \"v{version}\" or \"{version}\""
+        );
       }
       baseVersion = parseInt(versionMatch[1], 10);
     }
@@ -437,16 +431,17 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
 
     // Handle not found
     if (result === null) {
-      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", id);
     }
 
-    // Handle version conflict
+    // Handle version conflict (409 needs custom error response - not in standard helpers)
     if (typeof result === "object" && "conflict" in result) {
       return c.json({
-        error: true,
-        message: `Version conflict: expected version ${baseVersion}, but current version is ${result.currentVersion}`,
-        code: "VERSION_CONFLICT",
-        currentVersion: result.currentVersion
+        error: {
+          code: "VERSION_CONFLICT",
+          message: `Version conflict: expected version ${baseVersion}, but current version is ${result.currentVersion}`,
+          details: { currentVersion: result.currentVersion },
+        },
       }, 409);
     }
 
@@ -464,9 +459,9 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
   } catch (err) {
     console.error("PUT /api/diagrams/:id error:", err);
     if (err instanceof SyntaxError) {
-      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
     }
-    return c.json({ error: true, message: "Failed to update diagram", code: "UPDATE_FAILED" }, 500);
+    return errorResponse(c, "UPDATE_FAILED", "Failed to update diagram", 500);
   }
 });
 
@@ -476,17 +471,17 @@ app.delete("/api/diagrams/:id", async (c) => {
     const id = c.req.param("id");
     const deleted = await storage.deleteDiagram(id);
     if (!deleted) {
-      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", id);
     }
 
     // Invalidate caches
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
 
-    return c.json({ success: true });
+    return operationResponse(c, true);
   } catch (err) {
     console.error("DELETE /api/diagrams/:id error:", err);
-    return c.json({ error: true, message: "Failed to delete diagram", code: "DELETE_FAILED" }, 500);
+    return errorResponse(c, "DELETE_FAILED", "Failed to delete diagram", 500);
   }
 });
 
@@ -497,21 +492,21 @@ app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
     const body = await c.req.json<{ thumbnail: string }>();
 
     if (!body.thumbnail) {
-      return c.json({ error: true, message: "Thumbnail data URL required", code: "MISSING_THUMBNAIL" }, 400);
+      return validationErrorResponse(c, "Thumbnail data URL required");
     }
 
     if (!storage.getDiagram(id)) {
-      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", id);
     }
 
     const success = await storage.updateThumbnail(id, body.thumbnail);
-    return c.json({ success });
+    return operationResponse(c, success);
   } catch (err) {
     console.error("PUT /api/diagrams/:id/thumbnail error:", err);
     if (err instanceof SyntaxError) {
-      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
     }
-    return c.json({ error: true, message: "Failed to update thumbnail", code: "THUMBNAIL_FAILED" }, 500);
+    return errorResponse(c, "THUMBNAIL_FAILED", "Failed to update thumbnail", 500);
   }
 });
 
@@ -522,19 +517,19 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
 
     // Check if diagram exists
     if (!storage.getDiagram(id)) {
-      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", id);
     }
 
     // Load thumbnail from filesystem
     const dataUrl = await storage.loadThumbnail(id);
     if (!dataUrl) {
-      return c.json({ error: true, message: "Thumbnail not found", code: "THUMBNAIL_NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Thumbnail");
     }
 
     // Convert data URL to binary response for efficient caching
     const matches = dataUrl.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
     if (!matches) {
-      return c.json({ error: true, message: "Invalid thumbnail data", code: "INVALID_THUMBNAIL" }, 500);
+      return errorResponse(c, "INVALID_THUMBNAIL", "Invalid thumbnail data", 500);
     }
 
     const buffer = Buffer.from(matches[2], "base64");
@@ -546,7 +541,7 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
     });
   } catch (err) {
     console.error("GET /api/diagrams/:id/thumbnail error:", err);
-    return c.json({ error: true, message: "Failed to load thumbnail", code: "THUMBNAIL_LOAD_FAILED" }, 500);
+    return errorResponse(c, "THUMBNAIL_LOAD_FAILED", "Failed to load thumbnail", 500);
   }
 });
 
@@ -897,7 +892,7 @@ app.get("/api/performance/stats", (c) => {
     });
   } catch (err) {
     console.error("GET /api/performance/stats error:", err);
-    return c.json({ error: true, message: "Failed to get performance stats" }, 500);
+    return errorResponse(c, "STATS_FAILED", "Failed to get performance stats", 500);
   }
 });
 
@@ -907,10 +902,10 @@ app.post("/api/performance/clear-cache", (c) => {
     diagramCache.clear();
     listCache.clear();
     console.log("[performance] All caches cleared");
-    return c.json({ success: true, message: "All caches cleared" });
+    return operationResponse(c, true, "All caches cleared");
   } catch (err) {
     console.error("POST /api/performance/clear-cache error:", err);
-    return c.json({ error: true, message: "Failed to clear cache" }, 500);
+    return errorResponse(c, "CACHE_CLEAR_FAILED", "Failed to clear cache", 500);
   }
 });
 
@@ -923,7 +918,7 @@ app.get("/api/collab/stats", (c) => {
     return c.json(stats);
   } catch (err) {
     console.error("GET /api/collab/stats error:", err);
-    return c.json({ error: true, message: "Failed to get collaboration stats" }, 500);
+    return errorResponse(c, "COLLAB_STATS_FAILED", "Failed to get collaboration stats", 500);
   }
 });
 
@@ -952,7 +947,7 @@ app.get("/api/collab/rooms/:diagramId", (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     console.error("GET /api/collab/rooms/:diagramId error:", err);
-    return c.json({ error: true, message: "Failed to get room info" }, 500);
+    return errorResponse(c, "ROOM_INFO_FAILED", "Failed to get room info", 500);
   }
 });
 
@@ -965,7 +960,7 @@ app.get("/api/diagram-types", (c) => {
     return c.json({ types, count: types.length });
   } catch (err) {
     console.error("GET /api/diagram-types error:", err);
-    return c.json({ error: true, message: "Failed to list diagram types" }, 500);
+    return errorResponse(c, "LIST_TYPES_FAILED", "Failed to list diagram types", 500);
   }
 });
 
@@ -977,7 +972,7 @@ app.get("/api/diagram-types/:type", (c) => {
     return c.json(info);
   } catch (err) {
     console.error("GET /api/diagram-types/:type error:", err);
-    return c.json({ error: true, message: "Failed to get diagram type info" }, 500);
+    return errorResponse(c, "TYPE_INFO_FAILED", "Failed to get diagram type info", 500);
   }
 });
 
@@ -989,7 +984,7 @@ app.get("/api/diagram-types/:type/template", (c) => {
     return c.json({ template });
   } catch (err) {
     console.error("GET /api/diagram-types/:type/template error:", err);
-    return c.json({ error: true, message: "Failed to get diagram template" }, 500);
+    return errorResponse(c, "TEMPLATE_FAILED", "Failed to get diagram template", 500);
   }
 });
 
@@ -1014,7 +1009,7 @@ app.get("/api/diagrams/:id/export/mermaid", (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     console.error("GET /api/diagrams/:id/export/mermaid error:", err);
-    return c.json({ error: true, message: "Failed to export to Mermaid" }, 500);
+    return errorResponse(c, "MERMAID_EXPORT_FAILED", "Failed to export to Mermaid", 500);
   }
 });
 
@@ -1025,7 +1020,7 @@ app.get("/api/export-formats", (c) => {
     return c.json({ formats, count: formats.length });
   } catch (err) {
     console.error("GET /api/export-formats error:", err);
-    return c.json({ error: true, message: "Failed to get export formats" }, 500);
+    return errorResponse(c, "FORMATS_FAILED", "Failed to get export formats", 500);
   }
 });
 
@@ -1046,7 +1041,7 @@ app.get("/api/llm/status", async (c) => {
     });
   } catch (err) {
     console.error("GET /api/llm/status error:", err);
-    return c.json({ error: true, message: "Failed to get LLM status", code: "LLM_STATUS_ERROR" }, 500);
+    return errorResponse(c, "LLM_STATUS_ERROR", "Failed to get LLM status", 500);
   }
 });
 
@@ -1235,7 +1230,7 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
-      return c.json({ error: true, message: "Diagram not found", code: "DIAGRAM_NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", id);
     }
 
     const themedSpec = applyThemeToDiagram(diagram.spec, body.themeId);
@@ -1253,7 +1248,7 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
     });
   } catch (err) {
     console.error("POST /api/diagrams/:id/apply-theme error:", err);
-    return c.json({ error: true, message: "Failed to apply theme", code: "THEME_APPLY_FAILED" }, 500);
+    return errorResponse(c, "THEME_APPLY_FAILED", "Failed to apply theme", 500);
   }
 });
 
@@ -1265,12 +1260,12 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
 
     const diagram = storage.getDiagram(diagramId);
     if (!diagram) {
-      return c.json({ error: true, message: "Diagram not found", code: "DIAGRAM_NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", diagramId);
     }
 
     const agent = await getAgent(agentId);
     if (!agent) {
-      return c.json({ error: true, message: "Agent not found", code: "AGENT_NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Agent", agentId);
     }
 
     const result = await withTimeout(
@@ -1296,26 +1291,29 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
       });
     }
 
-    return c.json({
-      success: false,
-      error: true,
-      message: result.error || "Agent execution failed",
-      code: "AGENT_FAILED",
-    }, 400);
+    return errorResponse(
+      c,
+      "AGENT_FAILED",
+      result.error || "Agent execution failed",
+      400
+    );
   } catch (err) {
     if (err instanceof TimeoutError) {
+      // 504 Gateway Timeout - need to handle manually as it's not in standard helpers
       return c.json({
-        error: true,
-        message: err.message,
-        code: "AGENT_TIMEOUT",
+        error: {
+          code: "AGENT_TIMEOUT",
+          message: err.message,
+        },
       }, 504);
     }
     console.error("POST /api/diagrams/:diagramId/run-agent/:agentId error:", err);
-    return c.json({
-      error: true,
-      message: err instanceof Error ? err.message : "Failed to run agent",
-      code: "AGENT_EXECUTION_ERROR",
-    }, 500);
+    return errorResponse(
+      c,
+      "AGENT_EXECUTION_ERROR",
+      err instanceof Error ? err.message : "Failed to run agent",
+      500
+    );
   }
 });
 
@@ -1343,16 +1341,16 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) {
-      return new Response(JSON.stringify({ error: true, message: err.message, code: err.code }), {
-        status: err.status,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ error: { code: err.code, message: err.message } }),
+        { status: err.status, headers: { "Content-Type": "application/json" } }
+      );
     }
     console.error("GET /api/diagrams/:id/export/svg error:", err);
-    return new Response(JSON.stringify({ error: true, message: "Failed to export SVG", code: "EXPORT_FAILED" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: { code: "EXPORT_FAILED", message: "Failed to export SVG" } }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
   }
 });
 

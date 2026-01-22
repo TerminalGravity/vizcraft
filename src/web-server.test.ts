@@ -10,6 +10,12 @@ import { cors } from "hono/cors";
 import { Database } from "bun:sqlite";
 import { nanoid } from "nanoid";
 import type { DiagramSpec, Diagram } from "./types";
+import {
+  errorResponse,
+  notFoundResponse,
+  validationErrorResponse,
+  operationResponse,
+} from "./api/responses";
 
 // ==================== Test Database Setup ====================
 
@@ -244,18 +250,23 @@ function createTestApp() {
   // Global error handler
   app.onError((err, c) => {
     if (err instanceof APIError) {
-      return c.json({ error: true, message: err.message, code: err.code }, err.status as 400 | 404 | 500);
+      return errorResponse(c, err.code, err.message, err.status as 400 | 404 | 500);
     }
     if (err instanceof SyntaxError) {
-      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
     }
-    return c.json({ error: true, message: "Internal server error", code: "INTERNAL_ERROR" }, 500);
+    return errorResponse(c, "INTERNAL_ERROR", "Internal server error", 500);
   });
 
   // 404 handler
   app.notFound((c) => {
     if (c.req.path.startsWith("/api")) {
-      return c.json({ error: true, message: `API endpoint not found: ${c.req.method} ${c.req.path}`, code: "NOT_FOUND" }, 404);
+      return errorResponse(
+        c,
+        "NOT_FOUND",
+        `API endpoint not found: ${c.req.method} ${c.req.path}`,
+        404
+      );
     }
     return c.text("Not Found", 404);
   });
@@ -318,22 +329,22 @@ function createTestApp() {
       const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
 
       if (!body.name?.trim()) {
-        return c.json({ error: true, message: "Name is required", code: "MISSING_NAME" }, 400);
+        return validationErrorResponse(c, "Name is required");
       }
       if (!body.spec) {
-        return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
+        return validationErrorResponse(c, "Spec is required");
       }
       if (!body.spec.type || !body.spec.nodes) {
-        return c.json({ error: true, message: "Spec must have type and nodes", code: "INVALID_SPEC" }, 400);
+        return validationErrorResponse(c, "Spec must have type and nodes");
       }
 
       const diagram = testStorage.createDiagram(body.name.trim(), body.project?.trim() || "default", body.spec);
       return c.json(diagram, 201);
     } catch (err) {
       if (err instanceof SyntaxError) {
-        return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+        return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
       }
-      return c.json({ error: true, message: "Failed to create diagram", code: "CREATE_FAILED" }, 500);
+      return errorResponse(c, "CREATE_FAILED", "Failed to create diagram", 500);
     }
   });
 
@@ -344,20 +355,20 @@ function createTestApp() {
       const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
 
       if (!body.spec) {
-        return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
+        return validationErrorResponse(c, "Spec is required");
       }
 
       if (!testStorage.getDiagram(id)) {
-        return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+        return notFoundResponse(c, "Diagram", id);
       }
 
       const updated = testStorage.updateDiagram(id, body.spec, body.message);
       return c.json(updated);
     } catch (err) {
       if (err instanceof SyntaxError) {
-        return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+        return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
       }
-      return c.json({ error: true, message: "Failed to update diagram", code: "UPDATE_FAILED" }, 500);
+      return errorResponse(c, "UPDATE_FAILED", "Failed to update diagram", 500);
     }
   });
 
@@ -365,7 +376,7 @@ function createTestApp() {
   app.delete("/api/diagrams/:id", (c) => {
     const id = c.req.param("id");
     if (!testStorage.deleteDiagram(id)) {
-      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+      return notFoundResponse(c, "Diagram", id);
     }
     return c.json({ success: true });
   });
@@ -472,20 +483,20 @@ function createTestApp() {
       const body = await c.req.json<{ thumbnail: string }>();
 
       if (!body.thumbnail) {
-        return c.json({ error: true, message: "Thumbnail data URL required", code: "MISSING_THUMBNAIL" }, 400);
+        return validationErrorResponse(c, "Thumbnail data URL required");
       }
 
       if (!testStorage.getDiagram(id)) {
-        return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+        return notFoundResponse(c, "Diagram", id);
       }
 
       const success = testStorage.updateThumbnail(id, body.thumbnail);
-      return c.json({ success });
+      return operationResponse(c, success);
     } catch (err) {
       if (err instanceof SyntaxError) {
-        return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+        return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
       }
-      return c.json({ error: true, message: "Failed to update thumbnail", code: "THUMBNAIL_FAILED" }, 500);
+      return errorResponse(c, "THUMBNAIL_FAILED", "Failed to update thumbnail", 500);
     }
   });
 
@@ -564,8 +575,8 @@ describe("404 Handler", () => {
     expect(res.status).toBe(404);
 
     const data = await res.json();
-    expect(data.error).toBe(true);
-    expect(data.code).toBe("NOT_FOUND");
+    expect(data.error).toBeTruthy();
+    expect(data.error.code).toBe("NOT_FOUND");
   });
 });
 
@@ -607,8 +618,8 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.error).toBe(true);
-      expect(data.code).toBe("MISSING_NAME");
+      expect(data.error).toBeTruthy();
+      expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
     it("returns 400 when spec is missing", async () => {
@@ -619,7 +630,7 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("MISSING_SPEC");
+      expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
     it("returns 400 when spec is invalid", async () => {
@@ -631,7 +642,7 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("INVALID_SPEC");
+      expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
     it("returns 400 for malformed JSON", async () => {
@@ -644,7 +655,7 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("INVALID_JSON");
+      expect(data.error.code).toBe("INVALID_JSON");
     });
   });
 
@@ -740,7 +751,7 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(404);
 
       const data = await res.json();
-      expect(data.code).toBe("NOT_FOUND");
+      expect(data.error.code).toBe("NOT_FOUND");
     });
 
     it("returns 400 for empty ID", async () => {
@@ -748,7 +759,7 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("INVALID_ID");
+      expect(data.error.code).toBe("INVALID_ID");
     });
   });
 
@@ -794,7 +805,7 @@ describe("Diagrams API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("MISSING_SPEC");
+      expect(data.error.code).toBe("VALIDATION_ERROR");
     });
   });
 
@@ -860,7 +871,7 @@ describe("Versions API", () => {
       expect(res.status).toBe(404);
 
       const data = await res.json();
-      expect(data.code).toBe("VERSION_NOT_FOUND");
+      expect(data.error.code).toBe("VERSION_NOT_FOUND");
     });
 
     it("returns 400 for invalid version number", async () => {
@@ -870,7 +881,7 @@ describe("Versions API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("INVALID_VERSION");
+      expect(data.error.code).toBe("INVALID_VERSION");
     });
 
     it("returns 400 for negative version", async () => {
@@ -981,7 +992,7 @@ describe("Thumbnail API", () => {
       expect(res.status).toBe(400);
 
       const data = await res.json();
-      expect(data.code).toBe("MISSING_THUMBNAIL");
+      expect(data.error.code).toBe("VALIDATION_ERROR");
     });
 
     it("returns 404 for non-existent diagram", async () => {
@@ -1032,7 +1043,7 @@ describe("Error Handling", () => {
     expect(res.status).toBe(400);
 
     const data = await res.json();
-    expect(data.code).toBe("INVALID_JSON");
+    expect(data.error.code).toBe("INVALID_JSON");
   });
 });
 
