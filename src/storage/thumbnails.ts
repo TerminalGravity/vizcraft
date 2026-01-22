@@ -204,17 +204,38 @@ export async function getTotalThumbnailSize(): Promise<number> {
 
 /**
  * Cleanup orphaned thumbnails (thumbnails with no matching diagram)
+ *
+ * To prevent race conditions where a new diagram+thumbnail is created
+ * between checking IDs and deleting thumbnails, we only delete thumbnails
+ * that are older than a threshold (default: 5 minutes).
+ *
  * @param existingDiagramIds - Set of diagram IDs that exist in the database
+ * @param minAgeMs - Minimum age in milliseconds before a thumbnail can be deleted (default: 5 minutes)
  * @returns Number of thumbnails deleted
  */
 export async function cleanupOrphans(
-  existingDiagramIds: Set<string>
+  existingDiagramIds: Set<string>,
+  minAgeMs: number = 5 * 60 * 1000 // 5 minutes default
 ): Promise<number> {
   const thumbnailIds = await listThumbnails();
+  const now = Date.now();
   let deleted = 0;
+  let skippedTooNew = 0;
 
   for (const id of thumbnailIds) {
     if (!existingDiagramIds.has(id)) {
+      // Check the thumbnail's age before deleting to avoid race conditions
+      const info = await getThumbnailInfo(id);
+      if (info) {
+        const age = now - info.modifiedAt.getTime();
+        if (age < minAgeMs) {
+          // Thumbnail is too new - might have been created for a diagram
+          // that we just haven't seen yet. Skip it.
+          skippedTooNew++;
+          continue;
+        }
+      }
+
       const success = await deleteThumbnail(id);
       if (success) {
         deleted++;
@@ -222,8 +243,10 @@ export async function cleanupOrphans(
     }
   }
 
-  if (deleted > 0) {
-    console.log(`[thumbnails] Cleaned up ${deleted} orphaned thumbnails`);
+  if (deleted > 0 || skippedTooNew > 0) {
+    console.log(
+      `[thumbnails] Cleanup: ${deleted} deleted, ${skippedTooNew} skipped (too new)`
+    );
   }
 
   return deleted;

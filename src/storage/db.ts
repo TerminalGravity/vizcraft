@@ -332,13 +332,30 @@ export const storage = {
   },
 
   async deleteDiagram(id: string): Promise<boolean> {
-    // Delete associated thumbnail file
-    await deleteThumbnail(id);
+    // Delete database records FIRST (in a transaction), then thumbnail
+    // This ordering prevents the race condition where the diagram exists
+    // but the thumbnail is gone. Orphaned thumbnails are cleaned up later.
+    const deleteDb = db.transaction(() => {
+      db.run(`DELETE FROM diagram_versions WHERE diagram_id = ?`, [id]);
+      db.run(`DELETE FROM agent_runs WHERE diagram_id = ?`, [id]);
+      return db.run(`DELETE FROM diagrams WHERE id = ?`, [id]);
+    });
 
-    db.run(`DELETE FROM diagram_versions WHERE diagram_id = ?`, [id]);
-    db.run(`DELETE FROM agent_runs WHERE diagram_id = ?`, [id]);
-    const result = db.run(`DELETE FROM diagrams WHERE id = ?`, [id]);
-    return result.changes > 0;
+    const result = deleteDb();
+    const deleted = result.changes > 0;
+
+    if (deleted) {
+      // Delete thumbnail after DB records are gone
+      // If this fails, the thumbnail becomes orphaned and will be cleaned up
+      // by cleanupOrphanedThumbnails - but the data is consistent
+      try {
+        await deleteThumbnail(id);
+      } catch (err) {
+        console.warn(`[db] Failed to delete thumbnail for ${id}, will be cleaned up later:`, err);
+      }
+    }
+
+    return deleted;
   },
 
   /**

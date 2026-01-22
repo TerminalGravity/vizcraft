@@ -188,18 +188,34 @@ describe("Thumbnail Listing and Cleanup", () => {
     }
   });
 
-  it("cleans up orphaned thumbnails", async () => {
+  it("cleans up orphaned thumbnails older than threshold", async () => {
     // Create an orphan
     const orphanId = `orphan-${Date.now()}`;
     await saveThumbnail(orphanId, TEST_DATA_URL);
 
-    // Cleanup with only testIds as existing
+    // Cleanup with only testIds as existing, but with 0ms threshold (delete immediately)
     const existingIds = new Set(testIds);
-    const deleted = await cleanupOrphans(existingIds);
+    const deleted = await cleanupOrphans(existingIds, 0);
 
     // Should have deleted at least the orphan
     expect(deleted).toBeGreaterThanOrEqual(1);
     expect(await thumbnailExists(orphanId)).toBe(false);
+  });
+
+  it("skips orphaned thumbnails that are too new", async () => {
+    // Create an orphan
+    const newOrphanId = `new-orphan-${Date.now()}`;
+    await saveThumbnail(newOrphanId, TEST_DATA_URL);
+
+    // Cleanup with high age threshold (1 hour) - should skip the new orphan
+    const existingIds = new Set(testIds);
+    const deleted = await cleanupOrphans(existingIds, 60 * 60 * 1000);
+
+    // The new orphan should still exist because it's too new
+    expect(await thumbnailExists(newOrphanId)).toBe(true);
+
+    // Clean up manually for test isolation
+    await deleteThumbnail(newOrphanId);
   });
 });
 
