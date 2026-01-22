@@ -36,9 +36,9 @@ function formatZodError(error: ZodError): ValidationErrorDetail[] {
     };
 
     // Add expected/received for type errors
-    if (issue.code === "invalid_type") {
+    if (issue.code === "invalid_type" && "received" in issue) {
       detail.expected = issue.expected;
-      detail.received = issue.received;
+      detail.received = issue.received as string;
     }
 
     return detail;
