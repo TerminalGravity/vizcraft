@@ -13,6 +13,8 @@ export interface Participant {
   cursor?: { x: number; y: number };
   selection?: string[]; // Selected node IDs
   lastSeen: number;
+  /** Authenticated user ID (null if anonymous) */
+  userId?: string | null;
 }
 
 export interface Room {

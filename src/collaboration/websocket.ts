@@ -3,19 +3,32 @@
  *
  * Handles WebSocket connections for real-time diagram collaboration.
  * Uses Bun's native WebSocket support.
+ *
+ * Authentication:
+ * - Token can be provided via query parameter: /ws/collab?token=<jwt>
+ * - If no token, connection is allowed but userId will be null
+ * - User ID is associated with participant for attribution
  */
 
 import { roomManager } from "./room-manager";
 import type { ClientMessage } from "./types";
 import { COLLAB_CONFIG, validateClientMessage } from "./types";
 import type { Server } from "bun";
+import { verifyJWT } from "../auth/jwt";
+
+// WebSocket data includes authentication info
+interface WebSocketData {
+  participantId?: string;
+  userId?: string | null;
+  role?: "admin" | "user" | "viewer" | null;
+}
 
 // Track WebSocket to ServerWebSocket mapping for Bun
 type BunWebSocket = {
   send: (message: string) => void;
   close: () => void;
   readyState: number;
-  data?: { participantId?: string };
+  data?: WebSocketData;
 };
 
 /**
@@ -27,8 +40,9 @@ type BunServerWithWS = Server & {
 
 /**
  * Handle WebSocket upgrade request
+ * Validates JWT token if provided and associates user with connection
  */
-export function handleWebSocketUpgrade(req: Request, server: BunServerWithWS): Response | undefined {
+export async function handleWebSocketUpgrade(req: Request, server: BunServerWithWS): Promise<Response | undefined> {
   const url = new URL(req.url);
 
   // Only handle /ws/collab path
@@ -36,11 +50,33 @@ export function handleWebSocketUpgrade(req: Request, server: BunServerWithWS): R
     return undefined;
   }
 
-  // Upgrade to WebSocket
+  // Extract token from query parameter
+  const token = url.searchParams.get("token");
+  let userId: string | null = null;
+  let role: "admin" | "user" | "viewer" | null = null;
+
+  // Validate token if provided
+  if (token) {
+    const result = await verifyJWT(token);
+    if (result.valid && result.payload) {
+      userId = result.payload.sub;
+      role = result.payload.role as "admin" | "user" | "viewer" | null;
+    } else {
+      // Invalid token - reject connection
+      console.warn("[collab] WebSocket upgrade rejected: invalid token");
+      return new Response("Invalid authentication token", { status: 401 });
+    }
+  }
+  // Note: If no token provided, connection is allowed but userId will be null
+  // This maintains backwards compatibility with anonymous collaboration
+
+  // Upgrade to WebSocket with user context
   const upgraded = server.upgrade(req, {
     data: {
       participantId: null,
-    },
+      userId,
+      role,
+    } as WebSocketData,
   });
 
   if (!upgraded) {
@@ -183,17 +219,26 @@ export function handleWebSocketError(ws: BunWebSocket, error: Error): void {
 }
 
 /**
- * Wrap Bun's WebSocket to match our interface
+ * Wrapped WebSocket interface with user context
  */
-function wrapWebSocket(ws: BunWebSocket): {
+export interface WrappedWebSocket {
   send: (message: string) => void;
   close: () => void;
   readyState: number;
-} {
+  userId: string | null;
+  role: "admin" | "user" | "viewer" | null;
+}
+
+/**
+ * Wrap Bun's WebSocket to match our interface
+ */
+function wrapWebSocket(ws: BunWebSocket): WrappedWebSocket {
   return {
     send: (message: string) => ws.send(message),
     close: () => ws.close(),
     get readyState() { return ws.readyState; },
+    get userId() { return ws.data?.userId ?? null; },
+    get role() { return ws.data?.role ?? null; },
   };
 }
 

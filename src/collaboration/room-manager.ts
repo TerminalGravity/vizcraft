@@ -9,11 +9,13 @@ import { nanoid } from "nanoid";
 import type { Room, Participant, RoomState, ServerMessage } from "./types";
 import { COLLAB_CONFIG } from "./types";
 
-// WebSocket connection type
+// WebSocket connection type with optional user info
 type WebSocketConnection = {
   send: (message: string) => void;
   close: () => void;
   readyState: number;
+  userId?: string | null;
+  role?: "admin" | "user" | "viewer" | null;
 };
 
 // Rate limit state for a connection
@@ -32,6 +34,10 @@ interface ConnectionState {
   rateLimit: RateLimitState;
   /** Timestamp of last activity (message received) */
   lastActivity: number;
+  /** Authenticated user ID (null if anonymous) */
+  userId: string | null;
+  /** User role for authorization */
+  role: "admin" | "user" | "viewer" | null;
 }
 
 class RoomManager {
@@ -41,9 +47,13 @@ class RoomManager {
 
   /**
    * Register a new WebSocket connection
+   * Captures userId and role from the WebSocket if authenticated
    */
   registerConnection(ws: WebSocketConnection): void {
     const now = Date.now();
+    const userId = ws.userId ?? null;
+    const role = ws.role ?? null;
+
     const state: ConnectionState = {
       ws,
       participantId: nanoid(8),
@@ -54,6 +64,8 @@ class RoomManager {
         warnings: 0,
       },
       lastActivity: now,
+      userId,
+      role,
     };
     this.connections.set(ws, state);
 
@@ -64,7 +76,8 @@ class RoomManager {
       }
     }, COLLAB_CONFIG.PING_INTERVAL_MS);
 
-    console.log(`[collab] Connection registered: ${state.participantId}`);
+    const authStatus = userId ? `authenticated as ${userId}` : "anonymous";
+    console.log(`[collab] Connection registered: ${state.participantId} (${authStatus})`);
   }
 
   /**
@@ -122,12 +135,13 @@ class RoomManager {
       return;
     }
 
-    // Create participant
+    // Create participant with user association
     const participant: Participant = {
       id: state.participantId,
       name: name || `User ${state.participantId.slice(0, 4)}`,
       color: this.getNextColor(),
       lastSeen: Date.now(),
+      userId: state.userId,
     };
 
     // Add to room
@@ -480,6 +494,33 @@ class RoomManager {
   getRateLimitState(ws: WebSocketConnection): RateLimitState | null {
     const state = this.connections.get(ws);
     return state ? { ...state.rateLimit } : null;
+  }
+
+  /**
+   * Get connection info for a WebSocket (for testing/monitoring)
+   */
+  getConnectionInfo(ws: WebSocketConnection): { participantId: string; userId: string | null; role: string | null; diagramId: string | null } | null {
+    const state = this.connections.get(ws);
+    if (!state) return null;
+    return {
+      participantId: state.participantId,
+      userId: state.userId,
+      role: state.role,
+      diagramId: state.diagramId,
+    };
+  }
+
+  /**
+   * Check if a connection can perform write operations (for permission-based filtering)
+   * Returns true for admin/user roles, false for viewers
+   */
+  canWrite(ws: WebSocketConnection): boolean {
+    const state = this.connections.get(ws);
+    if (!state) return false;
+    // Anonymous users and viewers cannot write
+    if (!state.userId) return false;
+    if (state.role === "viewer") return false;
+    return true;
   }
 
   /**
