@@ -106,6 +106,10 @@ export interface Diagram {
   version: number; // For optimistic locking
   createdAt: string;
   updatedAt: string;
+  // Ownership fields
+  ownerId?: string | null;
+  isPublic?: boolean;
+  shares?: Array<{ userId: string; permission: "editor" | "viewer" }>;
 }
 
 export interface DiagramVersion {

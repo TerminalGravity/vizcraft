@@ -63,6 +63,28 @@ try {
   // Column already exists, ignore error
 }
 
+// Migration: Add auth columns for ownership and access control
+try {
+  db.run(`ALTER TABLE diagrams ADD COLUMN owner_id TEXT`);
+  console.log("[db] Added owner_id column to diagrams table");
+} catch {
+  // Column already exists, ignore error
+}
+
+try {
+  db.run(`ALTER TABLE diagrams ADD COLUMN is_public INTEGER DEFAULT 0`);
+  console.log("[db] Added is_public column to diagrams table");
+} catch {
+  // Column already exists, ignore error
+}
+
+try {
+  db.run(`ALTER TABLE diagrams ADD COLUMN shares TEXT`);
+  console.log("[db] Added shares column to diagrams table");
+} catch {
+  // Column already exists, ignore error
+}
+
 db.run(`
   CREATE TABLE IF NOT EXISTS diagram_versions (
     id TEXT PRIMARY KEY,
@@ -110,6 +132,12 @@ db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`)
 // Name search index with case-insensitive collation
 // This helps with case-insensitive sorting and prefix searches
 db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_name_nocase ON diagrams(name COLLATE NOCASE)`);
+
+// Owner index for filtering user's diagrams
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_owner ON diagrams(owner_id)`);
+
+// Composite index for owner + updated_at for listing user's diagrams
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_owner_updated ON diagrams(owner_id, updated_at DESC)`);
 
 // Expression index for diagram type filtering
 // Enables efficient queries like: WHERE json_extract(spec, '$.type') IN ('flowchart', 'architecture')
@@ -168,14 +196,21 @@ try {
 
 export const storage = {
   // Diagrams
-  createDiagram(name: string, project: string, spec: DiagramSpec): Diagram {
+  createDiagram(
+    name: string,
+    project: string,
+    spec: DiagramSpec,
+    options: { ownerId?: string; isPublic?: boolean } = {}
+  ): Diagram {
     const id = nanoid(12);
     const now = new Date().toISOString();
     const version = 1;
+    const ownerId = options.ownerId ?? null;
+    const isPublic = options.isPublic ?? false;
 
     db.run(
-      `INSERT INTO diagrams (id, name, project, spec, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [id, name, project, JSON.stringify(spec), version, now, now]
+      `INSERT INTO diagrams (id, name, project, spec, version, owner_id, is_public, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, name, project, JSON.stringify(spec), version, ownerId, isPublic ? 1 : 0, now, now]
     );
 
     // Create initial version
@@ -187,13 +222,28 @@ export const storage = {
       project,
       spec,
       version,
+      ownerId,
+      isPublic,
+      shares: [],
       createdAt: now,
       updatedAt: now,
     };
   },
 
   getDiagram(id: string): Diagram | null {
-    const row = db.query<{ id: string; name: string; project: string; spec: string; thumbnail_url: string | null; version: number; created_at: string; updated_at: string }, [string]>(
+    const row = db.query<{
+      id: string;
+      name: string;
+      project: string;
+      spec: string;
+      thumbnail_url: string | null;
+      version: number;
+      owner_id: string | null;
+      is_public: number | null;
+      shares: string | null;
+      created_at: string;
+      updated_at: string;
+    }, [string]>(
       `SELECT * FROM diagrams WHERE id = ?`
     ).get(id);
 
@@ -202,6 +252,21 @@ export const storage = {
     // Parse and validate spec with context for logging
     const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
 
+    // Parse shares JSON
+    let shares: Array<{ userId: string; permission: "editor" | "viewer" }> = [];
+    if (row.shares) {
+      try {
+        const parsed = JSON.parse(row.shares);
+        if (Array.isArray(parsed)) {
+          shares = parsed.filter(
+            (s) => s.userId && (s.permission === "editor" || s.permission === "viewer")
+          );
+        }
+      } catch {
+        // Invalid JSON, ignore
+      }
+    }
+
     return {
       id: row.id,
       name: row.name,
@@ -209,6 +274,9 @@ export const storage = {
       spec,
       thumbnailUrl: row.thumbnail_url || undefined,
       version: row.version ?? 1,
+      ownerId: row.owner_id,
+      isPublic: Boolean(row.is_public),
+      shares,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -847,6 +915,174 @@ export const storage = {
     ).get()?.count ?? 0;
 
     return { diagramCount, versionCount, projectCount };
+  },
+
+  // Ownership and Access Control
+  /**
+   * Update diagram ownership (transfer ownership)
+   */
+  updateOwner(id: string, ownerId: string): boolean {
+    const result = db.run(
+      `UPDATE diagrams SET owner_id = ?, updated_at = ? WHERE id = ?`,
+      [ownerId, new Date().toISOString(), id]
+    );
+    return result.changes > 0;
+  },
+
+  /**
+   * Update diagram public/private status
+   */
+  setPublic(id: string, isPublic: boolean): boolean {
+    const result = db.run(
+      `UPDATE diagrams SET is_public = ?, updated_at = ? WHERE id = ?`,
+      [isPublic ? 1 : 0, new Date().toISOString(), id]
+    );
+    return result.changes > 0;
+  },
+
+  /**
+   * Update diagram shares
+   */
+  updateShares(id: string, shares: Array<{ userId: string; permission: "editor" | "viewer" }>): boolean {
+    const result = db.run(
+      `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
+      [JSON.stringify(shares), new Date().toISOString(), id]
+    );
+    return result.changes > 0;
+  },
+
+  /**
+   * Add a share to a diagram
+   */
+  addShare(id: string, userId: string, permission: "editor" | "viewer"): boolean {
+    const diagram = this.getDiagram(id);
+    if (!diagram) return false;
+
+    const shares = diagram.shares || [];
+    // Remove existing share for this user if any
+    const filtered = shares.filter((s) => s.userId !== userId);
+    filtered.push({ userId, permission });
+
+    return this.updateShares(id, filtered);
+  },
+
+  /**
+   * Remove a share from a diagram
+   */
+  removeShare(id: string, userId: string): boolean {
+    const diagram = this.getDiagram(id);
+    if (!diagram) return false;
+
+    const shares = diagram.shares || [];
+    const filtered = shares.filter((s) => s.userId !== userId);
+
+    return this.updateShares(id, filtered);
+  },
+
+  /**
+   * List diagrams accessible by a user
+   */
+  listDiagramsForUser(
+    userId: string | null,
+    options: {
+      project?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ): { diagrams: Diagram[]; total: number } {
+    const { project, limit = 50, offset = 0 } = options;
+
+    // Build WHERE clause based on access:
+    // - User owns the diagram
+    // - Diagram is public
+    // - User is in the shares list
+    // - No owner (legacy diagrams)
+    let whereClause: string;
+    let params: unknown[];
+
+    if (userId) {
+      whereClause = `
+        WHERE (owner_id = ? OR owner_id IS NULL OR is_public = 1 OR shares LIKE ?)
+        ${project ? "AND project = ?" : ""}
+      `;
+      params = project
+        ? [userId, `%"userId":"${userId}"%`, project]
+        : [userId, `%"userId":"${userId}"%`];
+    } else {
+      // Anonymous user: only public diagrams or legacy diagrams
+      whereClause = `
+        WHERE (is_public = 1 OR owner_id IS NULL)
+        ${project ? "AND project = ?" : ""}
+      `;
+      params = project ? [project] : [];
+    }
+
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as total FROM diagrams ${whereClause}`;
+    const countRow = db.query<{ total: number }, unknown[]>(countQuery).get(...params);
+    const total = countRow?.total ?? 0;
+
+    // Get paginated results
+    type DiagramRow = {
+      id: string;
+      name: string;
+      project: string;
+      spec: string;
+      thumbnail_url: string | null;
+      version: number;
+      owner_id: string | null;
+      is_public: number | null;
+      shares: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+
+    const query = `
+      SELECT * FROM diagrams
+      ${whereClause}
+      ORDER BY updated_at DESC
+      LIMIT ? OFFSET ?
+    `;
+    const rows = db.query<DiagramRow, unknown[]>(query).all(
+      ...params,
+      limit,
+      offset
+    );
+
+    const diagrams = rows.map((row) => {
+      const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
+
+      // Parse shares JSON
+      let shares: Array<{ userId: string; permission: "editor" | "viewer" }> = [];
+      if (row.shares) {
+        try {
+          const parsed = JSON.parse(row.shares);
+          if (Array.isArray(parsed)) {
+            shares = parsed.filter(
+              (s) => s.userId && (s.permission === "editor" || s.permission === "viewer")
+            );
+          }
+        } catch {
+          // Invalid JSON, ignore
+        }
+      }
+
+      return {
+        id: row.id,
+        name: row.name,
+        project: row.project,
+        spec,
+        thumbnailUrl: row.thumbnail_url || undefined,
+        version: row.version ?? 1,
+        ownerId: row.owner_id,
+        isPublic: Boolean(row.is_public),
+        shares,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
+
+    return { diagrams, total };
   },
 };
 

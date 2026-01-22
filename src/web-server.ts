@@ -75,6 +75,22 @@ import {
   operationResponse,
 } from "./api/responses";
 import {
+  optionalAuth,
+  requireAuth,
+  getCurrentUser,
+  signJWT,
+  verifyJWT,
+  type UserContext,
+} from "./auth";
+import {
+  getEffectivePermission,
+  canRead,
+  canWrite,
+  canDelete,
+  parseOwnership,
+  PermissionDeniedError,
+} from "./auth/permissions";
+import {
   setDiagramIdProvider,
   startThumbnailCleanup,
   stopThumbnailCleanup,
@@ -191,12 +207,20 @@ if (typeof globalThis.CompressionStream !== "undefined") {
 // API-specific security headers (more restrictive)
 app.use("/api/*", apiSecurityHeaders());
 
+// Optional authentication - sets user context if valid token provided
+// Endpoints that require auth use requireAuth() explicitly
+app.use("/api/*", optionalAuth());
+
 // Global error handler
 app.onError((err, c) => {
   console.error(`[API Error] ${c.req.method} ${c.req.path}:`, err);
 
   if (err instanceof APIError) {
     return errorResponse(c, err.code, err.message, err.status as 400 | 404 | 500);
+  }
+
+  if (err instanceof PermissionDeniedError) {
+    return errorResponse(c, err.code, err.message, 403);
   }
 
   if (err instanceof TimeoutError) {
@@ -257,6 +281,124 @@ app.get("/metrics", (c) => {
   c.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
   return c.text(renderMetrics());
 });
+
+// =============================================================================
+// Authentication Endpoints
+// =============================================================================
+
+/**
+ * Generate a JWT token (development/testing only)
+ * In production, tokens would be issued by an identity provider
+ */
+app.post("/api/auth/token", smallBodyLimit, async (c) => {
+  // Only allow in non-production environments
+  if (process.env.NODE_ENV === "production") {
+    return errorResponse(
+      c,
+      "FORBIDDEN",
+      "Token generation endpoint is disabled in production",
+      403
+    );
+  }
+
+  try {
+    const body = await c.req.json();
+    const { userId, role = "user", expiresInSeconds = 24 * 60 * 60 } = body;
+
+    if (!userId || typeof userId !== "string") {
+      return validationErrorResponse(c, "userId is required and must be a string");
+    }
+
+    if (!["admin", "user", "viewer"].includes(role)) {
+      return validationErrorResponse(c, "role must be admin, user, or viewer");
+    }
+
+    const token = await signJWT(
+      { sub: userId, role },
+      { expiresInSeconds: Math.min(expiresInSeconds, 7 * 24 * 60 * 60) } // Max 7 days
+    );
+
+    return c.json({
+      token,
+      expiresIn: expiresInSeconds,
+      tokenType: "Bearer",
+    });
+  } catch (err) {
+    return errorResponse(
+      c,
+      "TOKEN_GENERATION_FAILED",
+      err instanceof Error ? err.message : "Failed to generate token",
+      500
+    );
+  }
+});
+
+/**
+ * Get current authenticated user
+ */
+app.get("/api/auth/me", (c) => {
+  const user = getCurrentUser(c);
+
+  if (!user) {
+    return c.json({
+      authenticated: false,
+      user: null,
+    });
+  }
+
+  return c.json({
+    authenticated: true,
+    user: {
+      id: user.id,
+      role: user.role,
+    },
+  });
+});
+
+/**
+ * Verify a token (for debugging)
+ */
+app.post("/api/auth/verify", smallBodyLimit, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { token } = body;
+
+    if (!token || typeof token !== "string") {
+      return validationErrorResponse(c, "token is required and must be a string");
+    }
+
+    const result = await verifyJWT(token);
+
+    if (!result.valid) {
+      return c.json({
+        valid: false,
+        error: result.error,
+      });
+    }
+
+    return c.json({
+      valid: true,
+      payload: {
+        sub: result.payload!.sub,
+        role: result.payload!.role,
+        iss: result.payload!.iss,
+        exp: result.payload!.exp,
+        iat: result.payload!.iat,
+      },
+    });
+  } catch (err) {
+    return errorResponse(
+      c,
+      "VERIFICATION_FAILED",
+      err instanceof Error ? err.message : "Failed to verify token",
+      500
+    );
+  }
+});
+
+// =============================================================================
+// Diagram Endpoints
+// =============================================================================
 
 // List diagrams with SQL-level pagination, sorting, search, and filtering
 app.get("/api/diagrams", async (c) => {
@@ -452,9 +594,15 @@ app.get("/api/diagrams/:id", (c) => {
 });
 
 // Create diagram (rate limited, body size limited)
+// Optionally accepts isPublic field - diagrams are private by default
 app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c) => {
   try {
-    const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
+    const body = await c.req.json<{
+      name: string;
+      project?: string;
+      spec: DiagramSpec;
+      isPublic?: boolean;
+    }>();
 
     if (!body.name?.trim()) {
       return validationErrorResponse(c, "Name is required");
@@ -466,7 +614,18 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
       return validationErrorResponse(c, "Spec must have type and nodes");
     }
 
-    const diagram = storage.createDiagram(body.name.trim(), body.project?.trim() || "default", body.spec);
+    // Get authenticated user (optional - allows anonymous diagram creation)
+    const user = getCurrentUser(c);
+
+    const diagram = storage.createDiagram(
+      body.name.trim(),
+      body.project?.trim() || "default",
+      body.spec,
+      {
+        ownerId: user?.id ?? null, // Associate with user if authenticated
+        isPublic: body.isPublic ?? false,
+      }
+    );
 
     // Invalidate list cache (new diagram added)
     listCache.invalidatePattern(/^list:/);
