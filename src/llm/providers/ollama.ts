@@ -20,6 +20,7 @@ import type {
 import { DiagramTransformOutputSchema } from "../types";
 import type { DiagramSpec } from "../../types";
 import { createLogger } from "../../logging";
+import { circuitBreakers, CircuitBreakerError } from "../../utils/circuit-breaker";
 
 const log = createLogger("ollama");
 
@@ -175,7 +176,7 @@ export class OllamaProvider implements LLMProvider {
    * Transform a diagram using natural language via Ollama
    */
   async transformDiagram(request: DiagramTransformRequest): Promise<DiagramTransformResponse> {
-    // Check if Ollama is running
+    // Check if Ollama is running (outside circuit breaker - it's a health check)
     const isHealthy = await this.healthCheck();
     if (!isHealthy) {
       return {
@@ -184,6 +185,31 @@ export class OllamaProvider implements LLMProvider {
       };
     }
 
+    // Check circuit breaker state before attempting
+    try {
+      return await circuitBreakers.llm.execute(() => this.executeTransform(request));
+    } catch (err) {
+      if (err instanceof CircuitBreakerError) {
+        log.warn("Circuit breaker open, failing fast", { retryAfter: err.retryAfter });
+        return {
+          success: false,
+          error: `LLM service temporarily unavailable. Please retry in ${err.retryAfter} seconds.`,
+        };
+      }
+      // Convert other errors to response format
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Internal method that performs the actual API call with retries
+   * Wrapped by circuit breaker for cascading failure protection
+   */
+  private async executeTransform(request: DiagramTransformRequest): Promise<DiagramTransformResponse> {
     const { spec, prompt, context, maxRetries = 2 } = request;
 
     // Build the prompt with JSON schema
@@ -319,10 +345,8 @@ export class OllamaProvider implements LLMProvider {
       }
     }
 
-    return {
-      success: false,
-      error: lastError?.message || "Failed to transform diagram after retries",
-    };
+    // Throw error so circuit breaker can track the failure
+    throw lastError || new Error("Failed to transform diagram after retries");
   }
 
   /**
