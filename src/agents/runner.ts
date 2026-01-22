@@ -7,6 +7,7 @@ import dagre from "@dagrejs/dagre";
 import type { DiagramSpec, DiagramNode } from "../types";
 import type { LoadedAgent } from "./loader";
 import { getProvider } from "../llm";
+import { circuitBreakers, CircuitBreakerError } from "../utils/circuit-breaker";
 
 export interface AgentRunResult {
   success: boolean;
@@ -93,8 +94,17 @@ async function runPresetAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Ag
   return { success: true, spec: currentSpec, changes };
 }
 
-// LLM agents - uses model-agnostic provider system
+// LLM agents - uses model-agnostic provider system with circuit breaker protection
 async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<AgentRunResult> {
+  // Check circuit breaker state first
+  if (!circuitBreakers.llm.canExecute()) {
+    const retryAfter = circuitBreakers.llm.getRetryAfter();
+    return {
+      success: false,
+      error: `LLM service temporarily unavailable. Please retry in ${retryAfter} seconds.`,
+    };
+  }
+
   // Get the appropriate provider (defaults to Anthropic)
   const provider = getProvider(agent.provider);
 
@@ -119,33 +129,56 @@ async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Agent
     };
   }
 
-  // Run the transformation
-  const result = await provider.transformDiagram({
-    spec,
-    prompt: agent.prompt,
-    context: agent.description,
-    maxRetries: 2,
-  });
+  try {
+    // Run the transformation through the circuit breaker
+    const result = await circuitBreakers.llm.execute(async () => {
+      const response = await provider.transformDiagram({
+        spec,
+        prompt: agent.prompt!,
+        context: agent.description,
+        maxRetries: 2,
+      });
 
-  if (result.success && result.spec) {
-    // Log usage for debugging
-    if (result.usage) {
-      console.error(
-        `[llm] ${agent.name}: ${result.usage.inputTokens} input, ${result.usage.outputTokens} output tokens (${result.usage.model})`
-      );
+      // If the LLM call succeeded but transformation failed, don't count as circuit failure
+      // Only network/API errors should trip the circuit
+      if (!response.success && response.error?.includes("API")) {
+        throw new Error(response.error);
+      }
+
+      return response;
+    });
+
+    if (result.success && result.spec) {
+      // Log usage for debugging
+      if (result.usage) {
+        console.error(
+          `[llm] ${agent.name}: ${result.usage.inputTokens} input, ${result.usage.outputTokens} output tokens (${result.usage.model})`
+        );
+      }
+
+      return {
+        success: true,
+        spec: result.spec,
+        changes: result.changes,
+      };
     }
 
     return {
-      success: true,
-      spec: result.spec,
-      changes: result.changes,
+      success: false,
+      error: result.error || "LLM transformation failed",
+    };
+  } catch (err) {
+    if (err instanceof CircuitBreakerError) {
+      return {
+        success: false,
+        error: `LLM service temporarily unavailable. Please retry in ${err.retryAfter} seconds.`,
+      };
+    }
+    return {
+      success: false,
+      error: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-
-  return {
-    success: false,
-    error: result.error || "LLM transformation failed",
-  };
 }
 
 // Apply dagre layout to diagram
