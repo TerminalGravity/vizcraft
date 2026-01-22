@@ -145,6 +145,20 @@ const Icons = {
       <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
     </svg>
   ),
+  Menu: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  ),
+  Info: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+  ),
 };
 
 // Agent type from API
@@ -183,6 +197,7 @@ function Sidebar({
   agents: Agent[];
   onRunAgent: (agentId: string) => void;
   runningAgent: string | null;
+  isOpen?: boolean;
 }) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set(["default"]));
 
@@ -197,7 +212,7 @@ function Sidebar({
   };
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${isOpen ? "open" : ""}`}>
       <div className="sidebar-section">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
           <span className="sidebar-title" style={{ marginBottom: 0 }}>Projects</span>
@@ -274,15 +289,17 @@ function Panel({
   onSendToClaude,
   onCopySpec,
   onExport,
+  isOpen,
 }: {
   diagram: Diagram | null;
   onSendToClaude: () => void;
   onCopySpec: () => void;
   onExport: (format: string) => void;
+  isOpen?: boolean;
 }) {
   if (!diagram) {
     return (
-      <aside className="panel">
+      <aside className={`panel ${isOpen ? "open" : ""}`}>
         <div className="empty-state">
           <p>Select a diagram to see details</p>
         </div>
@@ -291,7 +308,7 @@ function Panel({
   }
 
   return (
-    <aside className="panel">
+    <aside className={`panel ${isOpen ? "open" : ""}`}>
       <div className="panel-section">
         <h3 className="panel-title">Diagram Info</h3>
         <div style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
@@ -433,6 +450,8 @@ function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [runningAgent, setRunningAgent] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     // Check localStorage and system preference
     if (typeof window !== "undefined") {
@@ -789,10 +808,16 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
 
       <header className="header">
         <div className="header-logo">
+          <button className="mobile-toggle" onClick={() => setSidebarOpen(!sidebarOpen)} title="Toggle sidebar">
+            <Icons.Menu />
+          </button>
           <Icons.Logo />
           <span>Vizcraft</span>
         </div>
         <div className="header-actions">
+          <button className="mobile-toggle" onClick={() => setPanelOpen(!panelOpen)} title="Toggle panel">
+            <Icons.Info />
+          </button>
           <button className="btn btn-ghost btn-icon" onClick={loadDiagrams} title="Refresh">
             <Icons.Refresh />
           </button>
@@ -802,15 +827,30 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
         </div>
       </header>
 
+      {/* Mobile overlay */}
+      {(sidebarOpen || panelOpen) && (
+        <div
+          className="mobile-overlay visible"
+          onClick={() => {
+            setSidebarOpen(false);
+            setPanelOpen(false);
+          }}
+        />
+      )}
+
       <main className="main">
         <Sidebar
           projects={projects}
           selectedDiagram={selectedId}
-          onSelectDiagram={setSelectedId}
+          onSelectDiagram={(id) => {
+            setSelectedId(id);
+            setSidebarOpen(false);
+          }}
           onNewDiagram={handleNewDiagram}
           agents={agents}
           onRunAgent={handleRunAgent}
           runningAgent={runningAgent}
+          isOpen={sidebarOpen}
         />
 
         <div className="canvas-container">
@@ -837,6 +877,7 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
           onSendToClaude={handleSendToClaude}
           onCopySpec={handleCopySpec}
           onExport={handleExport}
+          isOpen={panelOpen}
         />
       </main>
     </div>

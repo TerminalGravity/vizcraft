@@ -471,3 +471,97 @@ body {
 .theme-toggle:hover {
   color: var(--accent);
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .main {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: -280px;
+    top: 60px;
+    bottom: 0;
+    width: 280px;
+    z-index: 100;
+    transition: left 0.3s ease;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
+  }
+
+  .sidebar.open {
+    left: 0;
+  }
+
+  .panel {
+    position: fixed;
+    right: -280px;
+    top: 60px;
+    bottom: 0;
+    width: 280px;
+    z-index: 100;
+    transition: right 0.3s ease;
+    box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
+  }
+
+  .panel.open {
+    right: 0;
+  }
+
+  .canvas-container {
+    width: 100%;
+  }
+
+  .mobile-toggle {
+    display: flex !important;
+  }
+
+  .btn-sm {
+    padding: 0.5rem;
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (min-width: 769px) {
+  .mobile-toggle {
+    display: none !important;
+  }
+
+  .sidebar, .panel {
+    position: relative;
+    left: auto;
+    right: auto;
+  }
+}
+
+/* Mobile toggle buttons */
+.mobile-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: var(--bg-tertiary);
+  border: none;
+  border-radius: 8px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.mobile-toggle:hover {
+  background: var(--accent);
+}
+
+/* Overlay for mobile */
+.mobile-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99;
+}
+
+.mobile-overlay.visible {
+  display: block;
+}
