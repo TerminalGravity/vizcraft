@@ -100,6 +100,16 @@ export const DiagramTypeSchema = z.enum([
 ]);
 
 /**
+ * Valid diagram types as a Set for O(1) lookup validation
+ */
+export const VALID_DIAGRAM_TYPES = new Set(DiagramTypeSchema.options);
+
+/**
+ * Type for diagram type values
+ */
+export type DiagramType = z.infer<typeof DiagramTypeSchema>;
+
+/**
  * Theme
  */
 export const ThemeSchema = z.enum(["dark", "light", "professional"]);
@@ -312,7 +322,8 @@ export const ListDiagramsQuerySchema = z.object({
   project: z.string().max(LIMITS.PROJECT_MAX).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   offset: z.coerce.number().int().min(0).optional().default(0),
-  minimal: z.enum(["true", "false"]).optional().transform(val => val === "true"),
+  // Default is minimal response (no spec); use full=true for complete specs
+  full: z.enum(["true", "false"]).optional().transform(val => val === "true"),
 });
 
 /**

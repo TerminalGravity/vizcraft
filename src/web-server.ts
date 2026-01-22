@@ -268,7 +268,8 @@ app.get("/api/diagrams", async (c) => {
     const sortOrder = c.req.query("sortOrder") as "asc" | "desc" | undefined;
     const search = c.req.query("search");
     const typesParam = c.req.query("types"); // Comma-separated: "flowchart,architecture"
-    const minimal = c.req.query("minimal") === "true";
+    // Default to minimal response (no spec) for better performance; use full=true for complete specs
+    const includeFullSpec = c.req.query("full") === "true";
 
     // Date range filters (ISO 8601 format: YYYY-MM-DD or full timestamp)
     const createdAfter = c.req.query("createdAfter");
@@ -292,7 +293,7 @@ app.get("/api/diagrams", async (c) => {
     const offset = rawOffset;
 
     // Build cache key from all parameters (including date filters)
-    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${createdAfter || ""}:${createdBefore || ""}:${updatedAfter || ""}:${updatedBefore || ""}:${minimal}`;
+    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${createdAfter || ""}:${createdBefore || ""}:${updatedAfter || ""}:${updatedBefore || ""}:${includeFullSpec}`;
     const cached = listCache.get(cacheKey);
     if (cached) {
       const etag = generateETag(cached);
@@ -362,10 +363,11 @@ app.get("/api/diagrams", async (c) => {
         name: d.name,
         project: d.project,
         type: d.spec.type,
-        // Skip spec in minimal mode for faster list loading
-        ...(minimal
-          ? { nodeCount: d.spec.nodes?.length ?? 0 }
-          : { spec: d.spec }),
+        // Default: minimal response with just nodeCount (better performance)
+        // Use full=true query param to include complete spec
+        ...(includeFullSpec
+          ? { spec: d.spec }
+          : { nodeCount: d.spec.nodes?.length ?? 0, edgeCount: d.spec.edges?.length ?? 0 }),
         // Return URL to thumbnail endpoint (client handles 404 for missing thumbnails)
         thumbnailUrl: `/api/diagrams/${d.id}/thumbnail`,
         createdAt: d.createdAt,

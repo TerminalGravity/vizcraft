@@ -309,7 +309,7 @@ function createTestApp() {
       const project = c.req.query("project");
       const limitParam = c.req.query("limit");
       const offsetParam = c.req.query("offset");
-      const minimal = c.req.query("minimal") === "true";
+      const includeFullSpec = c.req.query("full") === "true";
 
       const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
       const rawOffset = offsetParam ? parseInt(offsetParam, 10) : 0;
@@ -338,7 +338,7 @@ function createTestApp() {
           id: d.id,
           name: d.name,
           project: d.project,
-          ...(minimal ? { nodeCount: d.spec.nodes?.length ?? 0 } : { spec: d.spec }),
+          ...(includeFullSpec ? { spec: d.spec } : { nodeCount: d.spec.nodes?.length ?? 0, edgeCount: d.spec.edges?.length ?? 0 }),
           thumbnailUrl: d.thumbnailUrl,
           updatedAt: d.updatedAt,
         })),
@@ -794,15 +794,28 @@ describe("Diagrams API", () => {
       expect(data.limit).toBe(2);
     });
 
-    it("returns minimal data when minimal=true", async () => {
+    it("returns minimal data by default (no spec, just counts)", async () => {
       testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
 
-      const res = await apiRequest("GET", "/api/diagrams?minimal=true");
+      const res = await apiRequest("GET", "/api/diagrams");
       expect(res.status).toBe(200);
 
       const data = await res.json();
       expect(data.diagrams[0].nodeCount).toBe(2);
+      expect(data.diagrams[0].edgeCount).toBe(1);
       expect(data.diagrams[0].spec).toBeUndefined();
+    });
+
+    it("returns full spec when full=true", async () => {
+      testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+
+      const res = await apiRequest("GET", "/api/diagrams?full=true");
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.diagrams[0].spec).toBeDefined();
+      expect(data.diagrams[0].spec.nodes).toHaveLength(2);
+      expect(data.diagrams[0].nodeCount).toBeUndefined();
     });
 
     it("returns project list", async () => {
