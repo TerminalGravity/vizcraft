@@ -64,8 +64,44 @@ class APIError extends Error {
 
 const app = new Hono();
 
+// CORS configuration
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : ["http://localhost:3420", "http://127.0.0.1:3420"];
+
+// Log CORS configuration in development
+if (process.env.NODE_ENV !== "production") {
+  console.log(`[CORS] Allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
+}
+
 // Middleware
-app.use("*", cors());
+app.use(
+  "*",
+  cors({
+    origin: (origin) => {
+      // Allow requests with no origin (like mobile apps, curl, or same-origin)
+      if (!origin) return null;
+
+      // Check if origin is in allowed list
+      if (ALLOWED_ORIGINS.includes(origin)) {
+        return origin;
+      }
+
+      // In development, also allow localhost with any port
+      if (process.env.NODE_ENV !== "production" && origin.match(/^https?:\/\/localhost(:\d+)?$/)) {
+        return origin;
+      }
+
+      // Origin not allowed
+      return null;
+    },
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    exposeHeaders: ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "ETag"],
+    credentials: true,
+    maxAge: 86400, // 24 hours
+  })
+);
 app.use("*", logger());
 
 // Global error handler
