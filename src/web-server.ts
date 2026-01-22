@@ -59,6 +59,15 @@ import {
 } from "./api/shutdown";
 import { roomManager } from "./collaboration/room-manager";
 import {
+  escapeXml,
+  escapeAttribute,
+  sanitizeId,
+  sanitizeNumber,
+  sanitizeColor,
+  getSvgSecurityHeaders,
+  sanitizeSvgOutput,
+} from "./utils/svg-security";
+import {
   errorResponse,
   notFoundResponse,
   validationErrorResponse,
@@ -1436,12 +1445,16 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
-    const svg = generateSVG(diagram.spec);
+    const rawSvg = generateSVG(diagram.spec);
+    // Apply defense-in-depth sanitization
+    const svg = sanitizeSvgOutput(rawSvg);
     // Sanitize filename
     const safeName = diagram.name.replace(/[^a-zA-Z0-9-_]/g, "_");
+    // Get security headers for SVG content
+    const secHeaders = getSvgSecurityHeaders();
     return new Response(svg, {
       headers: {
-        "Content-Type": "image/svg+xml",
+        ...secHeaders,
         "Content-Disposition": `attachment; filename="${safeName}.svg"`,
         "Cache-Control": "no-cache",
       },
@@ -1489,26 +1502,36 @@ app.get("/api/diagrams/:id/export/png", rateLimiters.export, async (c) => {
 });
 
 // Generate SVG from diagram spec (server-side)
+// Security: All user-provided values are sanitized to prevent XSS
 function generateSVG(spec: DiagramSpec): string {
   const padding = 50;
   const nodeWidth = 150;
   const nodeHeight = 80;
 
   // Calculate positions for nodes if not specified
+  // Sanitize all position values to ensure they're valid numbers
   const nodePositions: Record<string, { x: number; y: number }> = {};
   spec.nodes.forEach((node, i) => {
-    nodePositions[node.id] = {
-      x: node.position?.x ?? padding + (i % 4) * (nodeWidth + 50),
-      y: node.position?.y ?? padding + Math.floor(i / 4) * (nodeHeight + 50),
+    // Sanitize node ID for use as lookup key
+    const safeId = sanitizeId(node.id);
+    nodePositions[safeId] = {
+      x: sanitizeNumber(node.position?.x, padding + (i % 4) * (nodeWidth + 50)),
+      y: sanitizeNumber(node.position?.y, padding + Math.floor(i / 4) * (nodeHeight + 50)),
     };
   });
 
   // Calculate SVG dimensions
   const positions = Object.values(nodePositions);
-  const maxX = Math.max(...positions.map((p) => p.x)) + nodeWidth + padding;
-  const maxY = Math.max(...positions.map((p) => p.y)) + nodeHeight + padding;
+  const maxX = sanitizeNumber(
+    Math.max(...positions.map((p) => p.x)) + nodeWidth + padding,
+    800
+  );
+  const maxY = sanitizeNumber(
+    Math.max(...positions.map((p) => p.y)) + nodeHeight + padding,
+    600
+  );
 
-  // Build SVG
+  // Build SVG with sanitized dimensions
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxX}" height="${maxY}" viewBox="0 0 ${maxX} ${maxY}">
   <style>
     .node { fill: #1e293b; stroke: #3b82f6; stroke-width: 2; }
@@ -1526,60 +1549,66 @@ function generateSVG(spec: DiagramSpec): string {
 
   // Draw edges first (so nodes appear on top)
   spec.edges.forEach((edge) => {
-    const from = nodePositions[edge.from];
-    const to = nodePositions[edge.to];
+    // Sanitize edge endpoint IDs for lookup
+    const fromId = sanitizeId(edge.from);
+    const toId = sanitizeId(edge.to);
+    const from = nodePositions[fromId];
+    const to = nodePositions[toId];
     if (from && to) {
-      const x1 = from.x + nodeWidth / 2;
-      const y1 = from.y + nodeHeight;
-      const x2 = to.x + nodeWidth / 2;
-      const y2 = to.y;
+      const x1 = sanitizeNumber(from.x + nodeWidth / 2);
+      const y1 = sanitizeNumber(from.y + nodeHeight);
+      const x2 = sanitizeNumber(to.x + nodeWidth / 2);
+      const y2 = sanitizeNumber(to.y);
 
       svg += `  <line class="edge" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />\n`;
 
       if (edge.label) {
-        const midX = (x1 + x2) / 2;
-        const midY = (y1 + y2) / 2;
-        svg += `  <text class="edge-label" x="${midX}" y="${midY - 8}">${escapeXml(edge.label)}</text>\n`;
+        const midX = sanitizeNumber((x1 + x2) / 2);
+        const midY = sanitizeNumber((y1 + y2) / 2 - 8);
+        // Use escapeXml for text content (safe for inner text)
+        svg += `  <text class="edge-label" x="${midX}" y="${midY}">${escapeXml(edge.label)}</text>\n`;
       }
     }
   });
 
   // Draw nodes
   spec.nodes.forEach((node) => {
-    const pos = nodePositions[node.id];
-    const cx = pos.x + nodeWidth / 2;
-    const cy = pos.y + nodeHeight / 2;
+    const safeId = sanitizeId(node.id);
+    const pos = nodePositions[safeId];
+    if (!pos) return; // Skip if position not found
+
+    const cx = sanitizeNumber(pos.x + nodeWidth / 2);
+    const cy = sanitizeNumber(pos.y + nodeHeight / 2);
+
+    // Get sanitized color if specified, otherwise use CSS class defaults
+    const nodeColor = node.color ? sanitizeColor(node.color) : undefined;
+    const colorStyle = nodeColor ? ` style="fill: ${escapeAttribute(nodeColor)}"` : "";
 
     if (node.type === "circle") {
-      svg += `  <ellipse class="node" cx="${cx}" cy="${cy}" rx="${nodeWidth / 2 - 10}" ry="${nodeHeight / 2 - 5}" />\n`;
+      const rx = sanitizeNumber(nodeWidth / 2 - 10);
+      const ry = sanitizeNumber(nodeHeight / 2 - 5);
+      svg += `  <ellipse class="node"${colorStyle} cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" />\n`;
     } else if (node.type === "diamond") {
       const points = [
-        `${cx},${pos.y}`,
-        `${pos.x + nodeWidth},${cy}`,
-        `${cx},${pos.y + nodeHeight}`,
-        `${pos.x},${cy}`,
+        `${cx},${sanitizeNumber(pos.y)}`,
+        `${sanitizeNumber(pos.x + nodeWidth)},${cy}`,
+        `${cx},${sanitizeNumber(pos.y + nodeHeight)}`,
+        `${sanitizeNumber(pos.x)},${cy}`,
       ].join(" ");
-      svg += `  <polygon class="node" points="${points}" />\n`;
+      svg += `  <polygon class="node"${colorStyle} points="${points}" />\n`;
     } else {
       // Default: rectangle
-      svg += `  <rect class="node" x="${pos.x}" y="${pos.y}" width="${nodeWidth}" height="${nodeHeight}" rx="8" />\n`;
+      const x = sanitizeNumber(pos.x);
+      const y = sanitizeNumber(pos.y);
+      svg += `  <rect class="node"${colorStyle} x="${x}" y="${y}" width="${nodeWidth}" height="${nodeHeight}" rx="8" />\n`;
     }
 
+    // Use escapeXml for text content
     svg += `  <text class="node-label" x="${cx}" y="${cy}">${escapeXml(node.label)}</text>\n`;
   });
 
   svg += "</svg>";
   return svg;
-}
-
-// Escape XML special characters
-function escapeXml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 // Server setup
