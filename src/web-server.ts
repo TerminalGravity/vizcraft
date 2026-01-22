@@ -50,6 +50,12 @@ import {
   TimeoutError,
   TIMEOUTS,
 } from "./api/timeout";
+import {
+  shutdownMiddleware,
+  installShutdownHandlers,
+  onShutdown,
+} from "./api/shutdown";
+import { roomManager } from "./collaboration/room-manager";
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -82,6 +88,9 @@ if (process.env.NODE_ENV !== "production") {
 // Middleware
 // Request context (must be first to track timing)
 app.use("*", requestContext());
+
+// Graceful shutdown middleware (rejects requests during shutdown)
+app.use("*", shutdownMiddleware());
 
 app.use(
   "*",
@@ -1470,6 +1479,18 @@ function escapeXml(str: string): string {
 
 // Server setup
 const WEB_DIR = join(import.meta.dir, "..", "web");
+
+// Install graceful shutdown handlers
+installShutdownHandlers();
+
+// Register shutdown callbacks
+onShutdown("close-websockets", () => {
+  roomManager.closeAll("Server shutting down");
+});
+
+onShutdown("flush-metrics", () => {
+  console.log("[shutdown] Metrics flushed");
+});
 
 const mimeTypes: Record<string, string> = {
   ".html": "text/html",

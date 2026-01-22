@@ -411,6 +411,38 @@ class RoomManager {
     return state ? { ...state.rateLimit } : null;
   }
 
+  /**
+   * Close all connections gracefully (for shutdown)
+   */
+  closeAll(reason = "Server shutting down"): number {
+    let closed = 0;
+    const connections = Array.from(this.connections.keys());
+
+    for (const ws of connections) {
+      try {
+        // Send shutdown message
+        this.send(ws, {
+          type: "error",
+          message: reason,
+          code: "SERVER_SHUTDOWN",
+        });
+
+        // Close with normal closure code
+        ws.close(1001, reason);
+        closed++;
+      } catch {
+        // Ignore errors during close
+      }
+    }
+
+    // Clear all state
+    this.rooms.clear();
+    this.connections.clear();
+
+    console.log(`[collab] Closed ${closed} WebSocket connections`);
+    return closed;
+  }
+
   // Private helpers
 
   private send(ws: WebSocketConnection, message: ServerMessage): void {
