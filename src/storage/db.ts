@@ -481,6 +481,10 @@ export const storage = {
     };
   },
 
+  /**
+   * Get all versions for a diagram
+   * @deprecated Use getVersionsPaginated for large version histories
+   */
   getVersions(diagramId: string): DiagramVersion[] {
     const rows = db.query<{ id: string; diagram_id: string; version: number; spec: string; message: string | null; created_at: string }, [string]>(
       `SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC`
@@ -491,6 +495,74 @@ export const storage = {
       diagramId: row.diagram_id,
       version: row.version,
       spec: JSON.parse(row.spec),
+      message: row.message || undefined,
+      createdAt: row.created_at,
+    }));
+  },
+
+  /**
+   * Get versions with SQL-level pagination
+   * More efficient than getVersions for large version histories
+   */
+  getVersionsPaginated(
+    diagramId: string,
+    limit: number = 20,
+    offset: number = 0
+  ): { versions: DiagramVersion[]; total: number } {
+    type VersionRow = {
+      id: string;
+      diagram_id: string;
+      version: number;
+      spec: string;
+      message: string | null;
+      created_at: string;
+    };
+
+    // Get total count first
+    const countRow = db.query<{ total: number }, [string]>(
+      `SELECT COUNT(*) as total FROM diagram_versions WHERE diagram_id = ?`
+    ).get(diagramId);
+    const total = countRow?.total ?? 0;
+
+    // Get paginated versions (newest first)
+    const rows = db.query<VersionRow, [string, number, number]>(
+      `SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC LIMIT ? OFFSET ?`
+    ).all(diagramId, limit, offset);
+
+    const versions = rows.map(row => ({
+      id: row.id,
+      diagramId: row.diagram_id,
+      version: row.version,
+      spec: JSON.parse(row.spec) as DiagramSpec,
+      message: row.message || undefined,
+      createdAt: row.created_at,
+    }));
+
+    return { versions, total };
+  },
+
+  /**
+   * Get version metadata without specs (lightweight)
+   * Useful for listing/overview where specs aren't needed
+   */
+  getVersionsMetadata(
+    diagramId: string,
+    limit: number = 50
+  ): Array<{ id: string; version: number; message?: string; createdAt: string }> {
+    type MetadataRow = {
+      id: string;
+      version: number;
+      message: string | null;
+      created_at: string;
+    };
+
+    const rows = db.query<MetadataRow, [string, number]>(
+      `SELECT id, version, message, created_at FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC LIMIT ?`
+    ).all(diagramId, limit);
+
+    return rows.map(row => ({
+      id: row.id,
+      version: row.version,
       message: row.message || undefined,
       createdAt: row.created_at,
     }));

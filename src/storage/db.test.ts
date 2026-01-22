@@ -233,6 +233,55 @@ const testStorage = {
     };
   },
 
+  getVersionsPaginated(
+    diagramId: string,
+    limit: number = 20,
+    offset: number = 0
+  ): { versions: DiagramVersion[]; total: number } {
+    const countRow = testDb.query<{ total: number }, [string]>(
+      `SELECT COUNT(*) as total FROM diagram_versions WHERE diagram_id = ?`
+    ).get(diagramId);
+    const total = countRow?.total ?? 0;
+
+    const rows = testDb.query<VersionRow, [string, number, number]>(
+      `SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC LIMIT ? OFFSET ?`
+    ).all(diagramId, limit, offset);
+
+    const versions = rows.map(row => ({
+      id: row.id,
+      diagramId: row.diagram_id,
+      version: row.version,
+      spec: JSON.parse(row.spec) as DiagramSpec,
+      message: row.message || undefined,
+      createdAt: row.created_at,
+    }));
+
+    return { versions, total };
+  },
+
+  getVersionsMetadata(
+    diagramId: string,
+    limit: number = 50
+  ): Array<{ id: string; version: number; message?: string; createdAt: string }> {
+    type MetadataRow = {
+      id: string;
+      version: number;
+      message: string | null;
+      created_at: string;
+    };
+
+    const rows = testDb.query<MetadataRow, [string, number]>(
+      `SELECT id, version, message, created_at FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC LIMIT ?`
+    ).all(diagramId, limit);
+
+    return rows.map(row => ({
+      id: row.id,
+      version: row.version,
+      message: row.message || undefined,
+      createdAt: row.created_at,
+    }));
+  },
+
   restoreVersion(diagramId: string, version: number): Diagram | null {
     const targetVersion = this.getVersion(diagramId, version);
     if (!targetVersion) return null;
@@ -673,6 +722,82 @@ describe("Version Operations", () => {
     it("returns null for non-existent diagram", () => {
       const result = testStorage.getLatestVersion("nonexistent");
       expect(result).toBeNull();
+    });
+  });
+
+  describe("getVersionsPaginated", () => {
+    it("returns paginated versions with total count", () => {
+      const diagram = testStorage.createDiagram("Pagination Test", "project", sampleFlowchartSpec);
+      testStorage.updateDiagram(diagram.id, sampleArchitectureSpec, "v2");
+      testStorage.updateDiagram(diagram.id, sampleFlowchartSpec, "v3");
+      testStorage.updateDiagram(diagram.id, sampleArchitectureSpec, "v4");
+      testStorage.updateDiagram(diagram.id, sampleFlowchartSpec, "v5");
+
+      // Get first page
+      const page1 = testStorage.getVersionsPaginated(diagram.id, 2, 0);
+      expect(page1.total).toBe(5);
+      expect(page1.versions.length).toBe(2);
+      expect(page1.versions[0].version).toBe(5); // Newest first
+      expect(page1.versions[1].version).toBe(4);
+
+      // Get second page
+      const page2 = testStorage.getVersionsPaginated(diagram.id, 2, 2);
+      expect(page2.total).toBe(5);
+      expect(page2.versions.length).toBe(2);
+      expect(page2.versions[0].version).toBe(3);
+      expect(page2.versions[1].version).toBe(2);
+    });
+
+    it("returns fewer results when near end", () => {
+      const diagram = testStorage.createDiagram("End Test", "project", sampleFlowchartSpec);
+      testStorage.updateDiagram(diagram.id, sampleArchitectureSpec, "v2");
+
+      const result = testStorage.getVersionsPaginated(diagram.id, 5, 0);
+      expect(result.total).toBe(2);
+      expect(result.versions.length).toBe(2);
+    });
+
+    it("returns empty array for offset beyond total", () => {
+      const diagram = testStorage.createDiagram("Offset Test", "project", sampleFlowchartSpec);
+
+      const result = testStorage.getVersionsPaginated(diagram.id, 10, 100);
+      expect(result.total).toBe(1);
+      expect(result.versions.length).toBe(0);
+    });
+
+    it("includes full spec in paginated results", () => {
+      const diagram = testStorage.createDiagram("Spec Test", "project", sampleFlowchartSpec);
+
+      const result = testStorage.getVersionsPaginated(diagram.id, 10, 0);
+      expect(result.versions[0].spec).toEqual(sampleFlowchartSpec);
+    });
+  });
+
+  describe("getVersionsMetadata", () => {
+    it("returns version metadata without specs", () => {
+      const diagram = testStorage.createDiagram("Metadata Test", "project", sampleFlowchartSpec);
+      testStorage.updateDiagram(diagram.id, sampleArchitectureSpec, "Updated");
+
+      const metadata = testStorage.getVersionsMetadata(diagram.id);
+
+      expect(metadata.length).toBe(2);
+      expect(metadata[0].version).toBe(2);
+      expect(metadata[0].message).toBe("Updated");
+      expect(metadata[0].createdAt).toBeDefined();
+      // @ts-expect-error - spec should not exist
+      expect(metadata[0].spec).toBeUndefined();
+    });
+
+    it("respects limit parameter", () => {
+      const diagram = testStorage.createDiagram("Limit Test", "project", sampleFlowchartSpec);
+      testStorage.updateDiagram(diagram.id, sampleArchitectureSpec, "v2");
+      testStorage.updateDiagram(diagram.id, sampleFlowchartSpec, "v3");
+
+      const metadata = testStorage.getVersionsMetadata(diagram.id, 2);
+
+      expect(metadata.length).toBe(2);
+      expect(metadata[0].version).toBe(3);
+      expect(metadata[1].version).toBe(2);
     });
   });
 

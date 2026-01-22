@@ -796,7 +796,9 @@ app.get("/api/diagrams/:id/timeline", (c) => {
   try {
     const id = c.req.param("id");
     const limitParam = c.req.query("limit");
-    const limit = limitParam ? parseInt(limitParam, 10) : 20;
+    const offsetParam = c.req.query("offset");
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 50) : 20;
+    const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
 
     if (!id?.trim()) {
       throw new APIError("INVALID_ID", "Diagram ID is required", 400);
@@ -807,17 +809,23 @@ app.get("/api/diagrams/:id/timeline", (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
-    const versions = storage.getVersions(id).slice(0, limit);
+    // Load limit + 1 versions to compute diffs (need previous version for comparison)
+    // Uses SQL-level pagination for efficiency
+    const { versions, total } = storage.getVersionsPaginated(id, limit + 1, offset);
 
-    // Calculate diff summaries for each version
-    const timeline = versions.map((version, i) => {
-      if (i === versions.length - 1) {
-        // First version - no diff
+    // Calculate diff summaries for each version (up to limit)
+    const timeline = versions.slice(0, limit).map((version, i) => {
+      // Check if this is the very first version (lowest version number in DB)
+      const isFirstEverVersion = version.version === 1;
+      const hasNextInBatch = i + 1 < versions.length;
+
+      if (isFirstEverVersion || !hasNextInBatch) {
+        // First version or no previous version in batch - no diff to compute
         return {
           version: version.version,
           message: version.message,
           createdAt: version.createdAt,
-          summary: "Initial version",
+          summary: isFirstEverVersion ? "Initial version" : "...",
           hasChanges: false,
         };
       }
@@ -839,7 +847,12 @@ app.get("/api/diagrams/:id/timeline", (c) => {
       diagramId: id,
       diagramName: diagram.name,
       timeline,
-      totalVersions: versions.length,
+      totalVersions: total,
+      pagination: {
+        limit,
+        offset,
+        hasMore: offset + limit < total,
+      },
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
