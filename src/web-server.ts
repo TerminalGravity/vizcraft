@@ -38,6 +38,7 @@ import {
 } from "./templates";
 import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
+import { rateLimiters } from "./api/rate-limiter";
 import {
   withTimeout,
   TimeoutError,
@@ -219,8 +220,8 @@ app.get("/api/diagrams/:id", (c) => {
   }
 });
 
-// Create diagram
-app.post("/api/diagrams", async (c) => {
+// Create diagram (rate limited)
+app.post("/api/diagrams", rateLimiters.diagramCreate, async (c) => {
   try {
     const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
 
@@ -926,8 +927,8 @@ app.get("/api/layouts", (c) => {
   }
 });
 
-// Apply layout to diagram
-app.post("/api/diagrams/:id/apply-layout", async (c) => {
+// Apply layout to diagram (rate limited)
+app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
   try {
     const id = c.req.param("id");
     const body = await c.req.json<{
@@ -987,8 +988,8 @@ app.post("/api/diagrams/:id/apply-layout", async (c) => {
   }
 });
 
-// Preview layout (returns positions without saving)
-app.post("/api/diagrams/:id/preview-layout", async (c) => {
+// Preview layout (returns positions without saving, rate limited)
+app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
   try {
     const id = c.req.param("id");
     const body = await c.req.json<{
@@ -1069,8 +1070,8 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
   }
 });
 
-// Run agent on diagram
-app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
+// Run agent on diagram (rate limited - expensive operation)
+app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, async (c) => {
   try {
     const diagramId = c.req.param("diagramId");
     const agentId = c.req.param("agentId");
@@ -1131,8 +1132,8 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
   }
 });
 
-// Export diagram as SVG (server-side generation)
-app.get("/api/diagrams/:id/export/svg", (c) => {
+// Export diagram as SVG (server-side generation, rate limited)
+app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
   try {
     const id = c.req.param("id");
     if (!id?.trim()) {
@@ -1168,8 +1169,8 @@ app.get("/api/diagrams/:id/export/svg", (c) => {
   }
 });
 
-// Export diagram as PNG (via SVG conversion)
-app.get("/api/diagrams/:id/export/png", async (c) => {
+// Export diagram as PNG (via SVG conversion, rate limited)
+app.get("/api/diagrams/:id/export/png", rateLimiters.export, async (c) => {
   try {
     const id = c.req.param("id");
     if (!id?.trim()) {
