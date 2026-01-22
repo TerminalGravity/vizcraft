@@ -471,8 +471,11 @@ describe("Diagram CRUD Operations", () => {
   });
 
   describe("updateDiagram", () => {
-    it("updates spec and creates new version", () => {
+    it("updates spec and creates new version", async () => {
       const diagram = testStorage.createDiagram("Test", "project", sampleFlowchartSpec);
+
+      // Small delay to ensure different timestamps
+      await new Promise(resolve => setTimeout(resolve, 5));
 
       const updatedSpec: DiagramSpec = {
         ...sampleFlowchartSpec,
