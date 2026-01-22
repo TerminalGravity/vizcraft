@@ -25,6 +25,21 @@ await Bun.write(`${DATA_DIR}/.gitkeep`, "");
 
 const db = new Database(DB_PATH, { create: true });
 
+// Enable WAL mode for better concurrent read/write performance
+// WAL allows readers to not block writers and vice versa
+db.run("PRAGMA journal_mode=WAL");
+
+// Set synchronous to NORMAL for better write performance
+// NORMAL is safe with WAL mode - data is still durable
+db.run("PRAGMA synchronous=NORMAL");
+
+// Increase cache size to 64MB for better read performance
+// Negative value = KB, positive = pages
+db.run("PRAGMA cache_size=-65536");
+
+// Enable foreign key constraints
+db.run("PRAGMA foreign_keys=ON");
+
 // Initialize schema
 db.run(`
   CREATE TABLE IF NOT EXISTS diagrams (
@@ -63,9 +78,24 @@ db.run(`
   )
 `);
 
-// Create indexes
+// Create indexes for better query performance
+// Diagrams table indexes
 db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_project ON diagrams(project)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_created_at ON diagrams(created_at)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_updated_at ON diagrams(updated_at)`);
+// Composite index for common query pattern: filter by project, sort by updated_at
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_project_updated ON diagrams(project, updated_at DESC)`);
+
+// Diagram versions table indexes
 db.run(`CREATE INDEX IF NOT EXISTS idx_versions_diagram ON diagram_versions(diagram_id)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_versions_created_at ON diagram_versions(created_at)`);
+// Composite index for version lookups
+db.run(`CREATE INDEX IF NOT EXISTS idx_versions_diagram_version ON diagram_versions(diagram_id, version DESC)`);
+
+// Agent runs table indexes
+db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_diagram ON agent_runs(diagram_id)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at ON agent_runs(created_at)`);
+db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`);
 
 export const storage = {
   // Diagrams
@@ -112,10 +142,15 @@ export const storage = {
   updateDiagram(id: string, spec: DiagramSpec, message?: string): Diagram | null {
     const now = new Date().toISOString();
 
-    db.run(
+    const result = db.run(
       `UPDATE diagrams SET spec = ?, updated_at = ? WHERE id = ?`,
       [JSON.stringify(spec), now, id]
     );
+
+    // Only create version if the diagram actually exists (update affected rows)
+    if (result.changes === 0) {
+      return null;
+    }
 
     // Create new version
     this.createVersion(id, spec, message);
