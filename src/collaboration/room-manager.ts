@@ -7,7 +7,7 @@
 
 import { nanoid } from "nanoid";
 import type { Room, Participant, RoomState, ServerMessage, DiagramChange } from "./types";
-import { COLLAB_CONFIG } from "./types";
+import { COLLAB_CONFIG, validateDiagramChanges } from "./types";
 
 // WebSocket connection type with optional user info
 type WebSocketConnection = {
@@ -248,8 +248,11 @@ class RoomManager {
 
   /**
    * Handle diagram changes from a participant
+   *
+   * Security: Validates all change data against schemas before broadcasting.
+   * This prevents malicious clients from injecting arbitrary payloads.
    */
-  handleChanges(ws: WebSocketConnection, changes: DiagramChange[], baseVersion: number): boolean {
+  handleChanges(ws: WebSocketConnection, changes: unknown[], baseVersion: number): boolean {
     const state = this.connections.get(ws);
     if (!state || !state.diagramId) {
       this.send(ws, { type: "error", message: "Not in a room", code: "NOT_IN_ROOM" });
@@ -258,6 +261,23 @@ class RoomManager {
 
     const room = this.rooms.get(state.diagramId);
     if (!room) return false;
+
+    // SECURITY: Validate all changes before processing
+    // This prevents malformed or malicious data from being broadcast
+    const validation = validateDiagramChanges(changes);
+    if (!validation.valid) {
+      this.send(ws, {
+        type: "error",
+        message: `Invalid change data: ${validation.error}`,
+        code: "INVALID_CHANGE_DATA",
+      });
+      console.warn(
+        `[collab] Rejected invalid changes from ${state.participantId}: ${validation.error}`
+      );
+      return false;
+    }
+
+    const validatedChanges = validation.data!;
 
     // Simple conflict detection: check if base version matches current
     if (baseVersion !== room.version) {
@@ -272,10 +292,10 @@ class RoomManager {
     // Update room version
     room.version++;
 
-    // Broadcast changes to all participants (including sender for confirmation)
+    // Broadcast validated changes to all participants (including sender for confirmation)
     this.broadcastToRoom(state.diagramId, {
       type: "changes",
-      changes,
+      changes: validatedChanges,
       author: state.participantId,
       version: room.version,
     });

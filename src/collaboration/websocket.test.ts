@@ -341,6 +341,10 @@ describe("Selection Updates", () => {
 });
 
 describe("Change Handling", () => {
+  // Valid change objects for tests
+  const validAddNode = { action: "add_node" as const, data: { id: "new-node", label: "New Node" } };
+  const validRemoveNode = { action: "remove_node" as const, target: "node-1" };
+
   it("accepts changes with matching version", () => {
     const ws = createMockWs();
     const diagramId = `change-test-${Date.now()}`;
@@ -353,7 +357,7 @@ describe("Change Handling", () => {
 
     const result = roomManager.handleChanges(
       ws,
-      [{ action: "add_node", data: { id: "new-node" } }],
+      [validAddNode],
       baseVersion
     );
 
@@ -370,10 +374,10 @@ describe("Change Handling", () => {
     roomManager.joinRoom(ws, diagramId, "Changer");
     clearMessages(ws);
 
-    // Use incorrect base version
+    // Use incorrect base version (999 when room version is 0)
     const result = roomManager.handleChanges(
       ws,
-      [{ action: "add_node" }],
+      [validAddNode],
       999
     );
 
@@ -394,7 +398,7 @@ describe("Change Handling", () => {
 
     const versionBefore = roomManager.getRoomInfo(diagramId)!.version;
 
-    roomManager.handleChanges(ws, [{ action: "add_node" }], versionBefore);
+    roomManager.handleChanges(ws, [validAddNode], versionBefore);
 
     const versionAfter = roomManager.getRoomInfo(diagramId)!.version;
     expect(versionAfter).toBe(versionBefore + 1);
@@ -420,7 +424,7 @@ describe("Change Handling", () => {
 
     roomManager.handleChanges(
       ws1,
-      [{ action: "add_node", target: "new-node" }],
+      [validAddNode],
       baseVersion
     );
 
@@ -440,7 +444,7 @@ describe("Change Handling", () => {
     roomManager.registerConnection(ws);
     clearMessages(ws);
 
-    const result = roomManager.handleChanges(ws, [{ action: "add_node" }], 0);
+    const result = roomManager.handleChanges(ws, [validAddNode], 0);
 
     expect(result).toBe(false);
 
@@ -448,6 +452,34 @@ describe("Change Handling", () => {
     expect(msg?.type).toBe("error");
     if (msg?.type === "error") {
       expect(msg.code).toBe("NOT_IN_ROOM");
+    }
+
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("rejects invalid change data", () => {
+    const ws = createMockWs();
+    const diagramId = `invalid-change-test-${Date.now()}`;
+
+    roomManager.registerConnection(ws);
+    roomManager.joinRoom(ws, diagramId, "Changer");
+    clearMessages(ws);
+
+    const baseVersion = roomManager.getRoomInfo(diagramId)!.version;
+
+    // Invalid: add_node requires data with id and label
+    const result = roomManager.handleChanges(
+      ws,
+      [{ action: "add_node", data: { label: "Missing ID" } }],
+      baseVersion
+    );
+
+    expect(result).toBe(false);
+
+    const msg = getLastMessage(ws);
+    expect(msg?.type).toBe("error");
+    if (msg?.type === "error") {
+      expect(msg.code).toBe("INVALID_CHANGE_DATA");
     }
 
     roomManager.handleDisconnect(ws);

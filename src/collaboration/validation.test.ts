@@ -171,11 +171,11 @@ describe("validateClientMessage", () => {
   });
 
   describe("change messages", () => {
-    it("accepts valid change message", () => {
+    it("accepts valid change message with add_node", () => {
       const result = validateClientMessage({
         type: "change",
         changes: [
-          { action: "add_node", target: "node-1", data: { label: "Test" } },
+          { action: "add_node", data: { id: "node-1", label: "Test Node" } },
         ],
         baseVersion: 1,
       });
@@ -183,22 +183,57 @@ describe("validateClientMessage", () => {
       expect(result.success).toBe(true);
     });
 
-    it("accepts all valid actions", () => {
-      const actions = [
-        "add_node", "remove_node", "update_node",
-        "add_edge", "remove_edge", "update_edge",
-        "update_style",
+    it("accepts all valid actions with proper data", () => {
+      // Each action type requires specific data format
+      const validChanges = [
+        { action: "add_node", data: { id: "n1", label: "Node" } },
+        { action: "remove_node", target: "n1" },
+        { action: "update_node", target: "n1", data: { label: "Updated" } },
+        { action: "add_edge", data: { from: "n1", to: "n2" } },
+        { action: "remove_edge", target: "e1" },
+        { action: "update_edge", target: "e1", data: { label: "Edge Label" } },
+        { action: "update_style", data: { theme: "dark" } },
       ];
 
-      for (const action of actions) {
+      for (const change of validChanges) {
         const result = validateClientMessage({
           type: "change",
-          changes: [{ action }],
+          changes: [change as Parameters<typeof validateClientMessage>[0] extends { changes: infer C } ? C extends (infer T)[] ? T : never : never],
           baseVersion: 0,
         });
 
         expect(result.success).toBe(true);
       }
+    });
+
+    it("rejects add_node without required fields", () => {
+      const result = validateClientMessage({
+        type: "change",
+        changes: [{ action: "add_node", data: { label: "Missing ID" } }],
+        baseVersion: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects add_edge without from/to", () => {
+      const result = validateClientMessage({
+        type: "change",
+        changes: [{ action: "add_edge", data: { label: "Missing endpoints" } }],
+        baseVersion: 0,
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("rejects update_style without any style data", () => {
+      const result = validateClientMessage({
+        type: "change",
+        changes: [{ action: "update_style", data: {} }],
+        baseVersion: 0,
+      });
+
+      expect(result.success).toBe(false);
     });
 
     it("rejects change with invalid action", () => {
@@ -212,9 +247,13 @@ describe("validateClientMessage", () => {
     });
 
     it("rejects change with too many changes", () => {
+      // Use valid change objects
       const result = validateClientMessage({
         type: "change",
-        changes: Array.from({ length: 101 }, () => ({ action: "add_node" })),
+        changes: Array.from({ length: 101 }, (_, i) => ({
+          action: "add_node",
+          data: { id: `node-${i}`, label: `Node ${i}` },
+        })),
         baseVersion: 0,
       });
 
@@ -224,7 +263,7 @@ describe("validateClientMessage", () => {
     it("rejects change with negative baseVersion", () => {
       const result = validateClientMessage({
         type: "change",
-        changes: [{ action: "add_node" }],
+        changes: [{ action: "add_node", data: { id: "n1", label: "Node" } }],
         baseVersion: -1,
       });
 
@@ -234,7 +273,7 @@ describe("validateClientMessage", () => {
     it("rejects change with non-integer baseVersion", () => {
       const result = validateClientMessage({
         type: "change",
-        changes: [{ action: "add_node" }],
+        changes: [{ action: "add_node", data: { id: "n1", label: "Node" } }],
         baseVersion: 1.5,
       });
 

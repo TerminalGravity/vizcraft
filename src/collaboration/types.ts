@@ -5,6 +5,11 @@
  */
 
 import { z } from "zod";
+import {
+  DiagramNodeSchema,
+  DiagramEdgeSchema,
+  LIMITS,
+} from "../validation/schemas";
 
 export interface Participant {
   id: string;
@@ -52,11 +57,23 @@ export interface RoomState {
   version: number;
 }
 
-export interface DiagramChange {
-  action: "add_node" | "remove_node" | "update_node" | "add_edge" | "remove_edge" | "update_edge" | "update_style";
-  target?: string; // Node or edge ID
-  data?: unknown;
-}
+/**
+ * Diagram change with validated data
+ * Action determines the shape of data:
+ * - add_node: DiagramNode (full node)
+ * - update_node: Partial<DiagramNode> (at least one field)
+ * - remove_node: undefined
+ * - add_edge: DiagramEdge (full edge)
+ * - update_edge: Partial<DiagramEdge> (at least one field)
+ * - remove_edge: undefined
+ * - update_style: StyleUpdateData
+ */
+export type DiagramChange = z.infer<typeof DiagramChangeSchema>;
+
+/**
+ * Style update data shape (exported for consumers)
+ */
+export type StyleUpdateData = z.infer<typeof StyleUpdateDataSchema>;
 
 // ==================== Zod Validation Schemas ====================
 // Runtime validation for WebSocket messages (TypeScript types are compile-time only)
@@ -69,18 +86,155 @@ const MAX_CHANGES_PER_MESSAGE = 100;
 const COORDINATE_MIN = -1_000_000;
 const COORDINATE_MAX = 1_000_000;
 
+// ==================== Action-Specific Change Schemas ====================
+// Each action type has specific data requirements validated at runtime
+
 /**
- * Diagram change validation
+ * Add node - requires full node data
  */
-const DiagramChangeSchema = z.object({
-  action: z.enum([
-    "add_node", "remove_node", "update_node",
-    "add_edge", "remove_edge", "update_edge",
-    "update_style",
-  ]),
+const AddNodeChangeSchema = z.object({
+  action: z.literal("add_node"),
   target: z.string().max(MAX_NODE_ID_LENGTH).optional(),
-  data: z.unknown().optional(),
+  data: DiagramNodeSchema,
 });
+
+/**
+ * Remove node - only needs target ID, data optional
+ */
+const RemoveNodeChangeSchema = z.object({
+  action: z.literal("remove_node"),
+  target: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+  data: z.undefined().optional(),
+});
+
+/**
+ * Update node - requires partial node data (at least one field)
+ */
+const UpdateNodeChangeSchema = z.object({
+  action: z.literal("update_node"),
+  target: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+  data: DiagramNodeSchema.partial().refine(
+    (data) => Object.keys(data).length > 0,
+    { message: "Update data must contain at least one field" }
+  ),
+});
+
+/**
+ * Add edge - requires full edge data
+ */
+const AddEdgeChangeSchema = z.object({
+  action: z.literal("add_edge"),
+  target: z.string().max(MAX_NODE_ID_LENGTH).optional(),
+  data: DiagramEdgeSchema,
+});
+
+/**
+ * Remove edge - only needs target ID
+ */
+const RemoveEdgeChangeSchema = z.object({
+  action: z.literal("remove_edge"),
+  target: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+  data: z.undefined().optional(),
+});
+
+/**
+ * Update edge - requires partial edge data
+ */
+const UpdateEdgeChangeSchema = z.object({
+  action: z.literal("update_edge"),
+  target: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+  data: DiagramEdgeSchema.partial().refine(
+    (data) => Object.keys(data).length > 0,
+    { message: "Update data must contain at least one field" }
+  ),
+});
+
+/**
+ * Update style - applies style changes to entire diagram
+ * Theme must be valid, colors must be valid hex or CSS names
+ */
+const StyleUpdateDataSchema = z.object({
+  theme: z.enum(["dark", "light", "professional"]).optional(),
+  nodeColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$|^[a-zA-Z]+$/).max(50).optional(),
+  edgeColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$|^[a-zA-Z]+$/).max(50).optional(),
+  backgroundColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$|^[a-zA-Z]+$/).max(50).optional(),
+}).refine(
+  (data) => Object.keys(data).length > 0,
+  { message: "Style update must contain at least one field" }
+);
+
+const UpdateStyleChangeSchema = z.object({
+  action: z.literal("update_style"),
+  target: z.undefined().optional(),
+  data: StyleUpdateDataSchema,
+});
+
+/**
+ * Discriminated union of all valid diagram changes
+ * Validates data field based on action type
+ */
+export const DiagramChangeSchema = z.discriminatedUnion("action", [
+  AddNodeChangeSchema,
+  RemoveNodeChangeSchema,
+  UpdateNodeChangeSchema,
+  AddEdgeChangeSchema,
+  RemoveEdgeChangeSchema,
+  UpdateEdgeChangeSchema,
+  UpdateStyleChangeSchema,
+]);
+
+/**
+ * Validate a single diagram change
+ * Returns validation result with error details
+ */
+export function validateDiagramChange(change: unknown): {
+  valid: boolean;
+  error?: string;
+  data?: DiagramChange;
+} {
+  const result = DiagramChangeSchema.safeParse(change);
+
+  if (result.success) {
+    return { valid: true, data: result.data };
+  }
+
+  const errors = result.error.issues.map(issue => {
+    const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+    return `${path}${issue.message}`;
+  });
+
+  return { valid: false, error: errors.join("; ") };
+}
+
+/**
+ * Validate an array of diagram changes
+ * Returns validation result with index of first invalid change
+ */
+export function validateDiagramChanges(changes: unknown[]): {
+  valid: boolean;
+  error?: string;
+  invalidIndex?: number;
+  data?: DiagramChange[];
+} {
+  const validatedChanges: DiagramChange[] = [];
+
+  for (let i = 0; i < changes.length; i++) {
+    const change = changes[i];
+    const result = validateDiagramChange(change);
+
+    if (!result.valid) {
+      return {
+        valid: false,
+        error: `Change ${i}: ${result.error}`,
+        invalidIndex: i,
+      };
+    }
+
+    validatedChanges.push(result.data!);
+  }
+
+  return { valid: true, data: validatedChanges };
+}
 
 /**
  * Join message schema
