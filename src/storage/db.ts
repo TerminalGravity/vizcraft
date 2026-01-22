@@ -194,6 +194,106 @@ try {
   console.warn("[db] FTS index rebuild failed:", err instanceof Error ? err.message : err);
 }
 
+// =============================================================================
+// Row Types & Helper Functions
+// =============================================================================
+
+/**
+ * Database row type for basic diagram queries (without ownership fields)
+ */
+interface BasicDiagramRow {
+  id: string;
+  name: string;
+  project: string;
+  spec: string;
+  thumbnail_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Database row type for full diagram queries (with ownership fields)
+ */
+interface FullDiagramRow extends BasicDiagramRow {
+  version: number | null;
+  owner_id: string | null;
+  is_public: number | null;
+  shares: string | null;
+}
+
+/**
+ * Type alias for rows that may or may not have ownership fields
+ */
+type DiagramRow = BasicDiagramRow | FullDiagramRow;
+
+/**
+ * Parse shares JSON from database row into typed array
+ * Handles invalid JSON gracefully by returning empty array
+ */
+function parseShares(
+  sharesJson: string | null
+): Array<{ userId: string; permission: "editor" | "viewer" }> {
+  if (!sharesJson) return [];
+
+  try {
+    const parsed = JSON.parse(sharesJson);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.filter(
+      (s): s is { userId: string; permission: "editor" | "viewer" } =>
+        typeof s === "object" &&
+        s !== null &&
+        typeof s.userId === "string" &&
+        (s.permission === "editor" || s.permission === "viewer")
+    );
+  } catch {
+    // Invalid JSON, return empty array
+    return [];
+  }
+}
+
+/**
+ * Parse a basic database row into a Diagram object with default ownership fields
+ * Used by listDiagrams() and listDiagramsPaginated() which don't query ownership columns
+ */
+function parseBasicRow(row: BasicDiagramRow): Diagram {
+  const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
+  return {
+    id: row.id,
+    name: row.name,
+    project: row.project,
+    spec,
+    thumbnailUrl: row.thumbnail_url || undefined,
+    version: 1, // Default version when not queried
+    ownerId: null, // Not available in basic query
+    isPublic: false, // Default to private
+    shares: [], // Not available in basic query
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Parse a full database row into a complete Diagram object (with ownership fields)
+ * Used by getDiagram() and listDiagramsForUser()
+ */
+function parseFullRow(row: FullDiagramRow): Diagram {
+  const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
+  return {
+    id: row.id,
+    name: row.name,
+    project: row.project,
+    spec,
+    thumbnailUrl: row.thumbnail_url || undefined,
+    version: row.version ?? 1,
+    ownerId: row.owner_id,
+    isPublic: Boolean(row.is_public),
+    shares: parseShares(row.shares),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export const storage = {
   // Diagrams
   createDiagram(
@@ -231,55 +331,13 @@ export const storage = {
   },
 
   getDiagram(id: string): Diagram | null {
-    const row = db.query<{
-      id: string;
-      name: string;
-      project: string;
-      spec: string;
-      thumbnail_url: string | null;
-      version: number;
-      owner_id: string | null;
-      is_public: number | null;
-      shares: string | null;
-      created_at: string;
-      updated_at: string;
-    }, [string]>(
+    const row = db.query<FullDiagramRow, [string]>(
       `SELECT * FROM diagrams WHERE id = ?`
     ).get(id);
 
     if (!row) return null;
 
-    // Parse and validate spec with context for logging
-    const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
-
-    // Parse shares JSON
-    let shares: Array<{ userId: string; permission: "editor" | "viewer" }> = [];
-    if (row.shares) {
-      try {
-        const parsed = JSON.parse(row.shares);
-        if (Array.isArray(parsed)) {
-          shares = parsed.filter(
-            (s) => s.userId && (s.permission === "editor" || s.permission === "viewer")
-          );
-        }
-      } catch {
-        // Invalid JSON, ignore
-      }
-    }
-
-    return {
-      id: row.id,
-      name: row.name,
-      project: row.project,
-      spec,
-      thumbnailUrl: row.thumbnail_url || undefined,
-      version: row.version ?? 1,
-      ownerId: row.owner_id,
-      isPublic: Boolean(row.is_public),
-      shares,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+    return parseFullRow(row);
   },
 
   /**
@@ -446,37 +504,15 @@ export const storage = {
    * @deprecated Use listDiagramsPaginated for large datasets
    */
   listDiagrams(project?: string): Diagram[] {
-    // Define row type for query results
-    type DiagramRow = {
-      id: string;
-      name: string;
-      project: string;
-      spec: string;
-      thumbnail_url: string | null;
-      created_at: string;
-      updated_at: string;
-    };
-
-    const rows: DiagramRow[] = project
-      ? db.query<DiagramRow, [string]>(
-          `SELECT * FROM diagrams WHERE project = ? ORDER BY updated_at DESC`
+    const rows = project
+      ? db.query<BasicDiagramRow, [string]>(
+          `SELECT id, name, project, spec, thumbnail_url, created_at, updated_at FROM diagrams WHERE project = ? ORDER BY updated_at DESC`
         ).all(project)
-      : db.query<DiagramRow, []>(
-          `SELECT * FROM diagrams ORDER BY updated_at DESC`
+      : db.query<BasicDiagramRow, []>(
+          `SELECT id, name, project, spec, thumbnail_url, created_at, updated_at FROM diagrams ORDER BY updated_at DESC`
         ).all();
 
-    return rows.map((row) => {
-      const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
-      return {
-        id: row.id,
-        name: row.name,
-        project: row.project,
-        spec,
-        thumbnailUrl: row.thumbnail_url || undefined,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
-    });
+    return rows.map(parseBasicRow);
   },
 
   /**
@@ -587,39 +623,16 @@ export const storage = {
 
     // Get paginated data
     const dataQuery = `
-      SELECT * FROM diagrams
+      SELECT id, name, project, spec, thumbnail_url, created_at, updated_at FROM diagrams
       ${whereClause}
       ORDER BY ${sortColumn} ${sortOrder.toUpperCase()}
       LIMIT ? OFFSET ?
     `;
 
-    type DiagramRow = {
-      id: string;
-      name: string;
-      project: string;
-      spec: string;
-      thumbnail_url: string | null;
-      created_at: string;
-      updated_at: string;
-    };
-
-    const rows = db.query<DiagramRow, (string | number)[]>(dataQuery)
+    const rows = db.query<BasicDiagramRow, (string | number)[]>(dataQuery)
       .all(...params, limit, offset);
 
-    const data = rows.map((row) => {
-      const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
-      return {
-        id: row.id,
-        name: row.name,
-        project: row.project,
-        spec,
-        thumbnailUrl: row.thumbnail_url || undefined,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
-    });
-
-    return { data, total };
+    return { data: rows.map(parseBasicRow), total };
   },
 
   /**
@@ -1071,66 +1084,19 @@ export const storage = {
     const total = countRow?.total ?? 0;
 
     // Get paginated results
-    type DiagramRow = {
-      id: string;
-      name: string;
-      project: string;
-      spec: string;
-      thumbnail_url: string | null;
-      version: number;
-      owner_id: string | null;
-      is_public: number | null;
-      shares: string | null;
-      created_at: string;
-      updated_at: string;
-    };
-
     const query = `
       SELECT * FROM diagrams
       ${whereClause}
       ORDER BY updated_at DESC
       LIMIT ? OFFSET ?
     `;
-    const rows = db.query<DiagramRow, unknown[]>(query).all(
+    const rows = db.query<FullDiagramRow, unknown[]>(query).all(
       ...params,
       limit,
       offset
     );
 
-    const diagrams = rows.map((row) => {
-      const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
-
-      // Parse shares JSON
-      let shares: Array<{ userId: string; permission: "editor" | "viewer" }> = [];
-      if (row.shares) {
-        try {
-          const parsed = JSON.parse(row.shares);
-          if (Array.isArray(parsed)) {
-            shares = parsed.filter(
-              (s) => s.userId && (s.permission === "editor" || s.permission === "viewer")
-            );
-          }
-        } catch {
-          // Invalid JSON, ignore
-        }
-      }
-
-      return {
-        id: row.id,
-        name: row.name,
-        project: row.project,
-        spec,
-        thumbnailUrl: row.thumbnail_url || undefined,
-        version: row.version ?? 1,
-        ownerId: row.owner_id,
-        isPublic: Boolean(row.is_public),
-        shares,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      };
-    });
-
-    return { diagrams, total };
+    return { diagrams: rows.map(parseFullRow), total };
   },
 };
 
