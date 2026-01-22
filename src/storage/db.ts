@@ -8,7 +8,7 @@
 import { Database } from "bun:sqlite";
 import { nanoid } from "nanoid";
 import type { Diagram, DiagramSpec, DiagramVersion } from "../types";
-import { safeParseSpec } from "../validation/schemas";
+import { safeParseSpec, VALID_DIAGRAM_TYPES } from "../validation/schemas";
 import {
   saveThumbnail,
   loadThumbnail,
@@ -359,6 +359,16 @@ export const storage = {
   },
 
   /**
+   * Get all diagram IDs efficiently (for cleanup operations)
+   * This is much faster than listDiagrams when you only need IDs
+   */
+  getAllDiagramIds(): Set<string> {
+    type IdRow = { id: string };
+    const rows = db.query<IdRow, []>(`SELECT id FROM diagrams`).all();
+    return new Set(rows.map((row) => row.id));
+  },
+
+  /**
    * List diagrams with optional pagination and filtering
    * @deprecated Use listDiagramsPaginated for large datasets
    */
@@ -453,10 +463,17 @@ export const storage = {
     }
 
     if (types && types.length > 0) {
-      // Filter by diagram type (stored in spec.type)
-      const typePlaceholders = types.map(() => "?").join(", ");
-      conditions.push(`json_extract(spec, '$.type') IN (${typePlaceholders})`);
-      params.push(...types);
+      // Validate types against the DiagramTypeSchema enum to prevent SQL injection
+      // and ensure only valid types are queried
+      const validTypes = types.filter(t => VALID_DIAGRAM_TYPES.has(t));
+      if (validTypes.length > 0) {
+        // Filter by diagram type (stored in spec.type)
+        const typePlaceholders = validTypes.map(() => "?").join(", ");
+        conditions.push(`json_extract(spec, '$.type') IN (${typePlaceholders})`);
+        params.push(...validTypes);
+      }
+      // If no valid types remain after filtering, the condition is simply not added
+      // which returns all diagrams (rather than returning an error)
     }
 
     // Date range filters - SQLite stores ISO timestamps as TEXT which sort lexicographically
@@ -551,17 +568,25 @@ export const storage = {
     const id = nanoid(12);
     const now = new Date().toISOString();
 
-    // Get next version number
-    const lastVersion = db.query<{ version: number }, [string]>(
-      `SELECT MAX(version) as version FROM diagram_versions WHERE diagram_id = ?`
-    ).get(diagramId);
+    // Use transaction to prevent race condition where two concurrent calls
+    // both read the same MAX(version) and try to insert duplicate version numbers
+    const createVersionTx = db.transaction(() => {
+      // Get next version number (inside transaction for atomicity)
+      const lastVersion = db.query<{ version: number }, [string]>(
+        `SELECT MAX(version) as version FROM diagram_versions WHERE diagram_id = ?`
+      ).get(diagramId);
 
-    const version = (lastVersion?.version || 0) + 1;
+      const version = (lastVersion?.version || 0) + 1;
 
-    db.run(
-      `INSERT INTO diagram_versions (id, diagram_id, version, spec, message, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, diagramId, version, JSON.stringify(spec), message || null, now]
-    );
+      db.run(
+        `INSERT INTO diagram_versions (id, diagram_id, version, spec, message, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        [id, diagramId, version, JSON.stringify(spec), message || null, now]
+      );
+
+      return version;
+    });
+
+    const version = createVersionTx();
 
     return {
       id,

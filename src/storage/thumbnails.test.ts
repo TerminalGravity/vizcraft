@@ -249,3 +249,62 @@ describe("Edge Cases", () => {
     expect(filename.endsWith(".png")).toBe(true);
   });
 });
+
+describe("Scheduled Cleanup", () => {
+  it("has cleanup functions available", async () => {
+    const {
+      setDiagramIdProvider,
+      startThumbnailCleanup,
+      stopThumbnailCleanup,
+      isThumbnailCleanupRunning,
+      getThumbnailCleanupStats,
+    } = await import("./thumbnails");
+
+    expect(typeof setDiagramIdProvider).toBe("function");
+    expect(typeof startThumbnailCleanup).toBe("function");
+    expect(typeof stopThumbnailCleanup).toBe("function");
+    expect(typeof isThumbnailCleanupRunning).toBe("function");
+    expect(typeof getThumbnailCleanupStats).toBe("function");
+  });
+
+  it("returns stats object", async () => {
+    const { getThumbnailCleanupStats } = await import("./thumbnails");
+
+    const stats = getThumbnailCleanupStats();
+
+    expect(typeof stats.isRunning).toBe("boolean");
+    expect(typeof stats.lastCleanupTime).toBe("number");
+    expect(typeof stats.intervalMs).toBe("number");
+    expect(stats.intervalMs).toBeGreaterThan(0);
+  });
+
+  it("can set diagram ID provider", async () => {
+    const { setDiagramIdProvider } = await import("./thumbnails");
+
+    // Should not throw
+    setDiagramIdProvider(() => new Set(["id1", "id2"]));
+  });
+
+  it("can start and stop cleanup interval", async () => {
+    const {
+      startThumbnailCleanup,
+      stopThumbnailCleanup,
+      isThumbnailCleanupRunning,
+    } = await import("./thumbnails");
+
+    // Note: cleanup may already be running from module load
+    // So we just verify the functions work
+
+    // Stop if running
+    stopThumbnailCleanup();
+    expect(isThumbnailCleanupRunning()).toBe(false);
+
+    // Start
+    startThumbnailCleanup();
+    expect(isThumbnailCleanupRunning()).toBe(true);
+
+    // Stop again
+    stopThumbnailCleanup();
+    expect(isThumbnailCleanupRunning()).toBe(false);
+  });
+});

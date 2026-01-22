@@ -73,6 +73,12 @@ import {
   validationErrorResponse,
   operationResponse,
 } from "./api/responses";
+import {
+  setDiagramIdProvider,
+  startThumbnailCleanup,
+  stopThumbnailCleanup,
+  getThumbnailCleanupStats,
+} from "./storage/thumbnails";
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -1718,5 +1724,16 @@ Bun.serve({
 console.log(`[vizcraft] Web UI: http://localhost:${PORT}`);
 console.log(`[vizcraft] API: http://localhost:${PORT}/api`);
 console.log(`[vizcraft] WebSocket: ws://localhost:${PORT}/ws/collab`);
+
+// Initialize thumbnail cleanup
+// This requires access to the storage module to get diagram IDs
+setDiagramIdProvider(() => storage.getAllDiagramIds());
+startThumbnailCleanup();
+
+// Register thumbnail cleanup for graceful shutdown
+onShutdown(() => {
+  stopThumbnailCleanup();
+  return Promise.resolve();
+});
 
 // Note: Do NOT export the server - causes Bun 1.3.2 dev bundler stack overflow

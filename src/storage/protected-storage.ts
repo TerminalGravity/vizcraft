@@ -160,6 +160,15 @@ export const protectedStorage = {
     );
   },
 
+  /**
+   * Get all diagram IDs (for cleanup operations)
+   */
+  getAllDiagramIds(): Set<string> {
+    return withProtection("SELECT", "diagrams", () =>
+      rawStorage.getAllDiagramIds()
+    );
+  },
+
   // ==========================================
   // Version operations
   // ==========================================

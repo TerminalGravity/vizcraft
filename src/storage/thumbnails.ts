@@ -6,6 +6,9 @@
  * improves query performance.
  *
  * File format: {DATA_DIR}/thumbnails/{diagramId}.png
+ *
+ * Includes scheduled cleanup of orphaned thumbnails (thumbnails with
+ * no corresponding diagram in the database).
  */
 
 import { join } from "path";
@@ -254,3 +257,126 @@ export async function cleanupOrphans(
 
 // Export directory path for testing
 export const THUMBNAIL_DIRECTORY = THUMBNAIL_DIR;
+
+// ==================== Scheduled Cleanup ====================
+
+// Configuration
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const ORPHAN_MIN_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+// Cleanup state
+let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+let lastCleanupTime = 0;
+let lastCleanupStats: { deleted: number; duration: number } | null = null;
+
+// Type for getting diagram IDs (injected to avoid circular dependency)
+type GetDiagramIdsFn = () => Set<string>;
+let getDiagramIdsFn: GetDiagramIdsFn | null = null;
+
+/**
+ * Set the function to get diagram IDs from the database
+ * This must be called during application startup to enable scheduled cleanup
+ */
+export function setDiagramIdProvider(fn: GetDiagramIdsFn): void {
+  getDiagramIdsFn = fn;
+  console.log("[thumbnails] Diagram ID provider registered");
+}
+
+/**
+ * Perform scheduled cleanup of orphaned thumbnails
+ * Wrapped in try-catch to prevent interval failures
+ */
+async function performScheduledCleanup(): Promise<void> {
+  if (!getDiagramIdsFn) {
+    console.warn("[thumbnails] Scheduled cleanup skipped: no diagram ID provider");
+    return;
+  }
+
+  const startTime = Date.now();
+
+  try {
+    const diagramIds = getDiagramIdsFn();
+    const deleted = await cleanupOrphans(diagramIds, ORPHAN_MIN_AGE_MS);
+
+    const duration = Date.now() - startTime;
+    lastCleanupTime = Date.now();
+    lastCleanupStats = { deleted, duration };
+
+    if (deleted > 0) {
+      console.log(
+        `[thumbnails] Scheduled cleanup: ${deleted} orphans deleted in ${duration}ms`
+      );
+    }
+  } catch (err) {
+    // Log error but don't crash - cleanup is best-effort
+    console.error(
+      "[thumbnails] Scheduled cleanup failed:",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/**
+ * Start the thumbnail cleanup interval (idempotent)
+ */
+export function startThumbnailCleanup(): void {
+  if (cleanupIntervalId !== null) return;
+
+  cleanupIntervalId = setInterval(() => {
+    performScheduledCleanup().catch((err) => {
+      console.error("[thumbnails] Unhandled cleanup error:", err);
+    });
+  }, CLEANUP_INTERVAL_MS);
+
+  // Unref to allow process to exit even if interval is running
+  if (typeof cleanupIntervalId === "object" && "unref" in cleanupIntervalId) {
+    cleanupIntervalId.unref();
+  }
+
+  console.log(
+    `[thumbnails] Cleanup interval started (every ${CLEANUP_INTERVAL_MS / 60000} minutes)`
+  );
+
+  // Run initial cleanup after a short delay (30 seconds)
+  // This catches orphans from previous sessions
+  setTimeout(() => {
+    performScheduledCleanup().catch((err) => {
+      console.error("[thumbnails] Initial cleanup error:", err);
+    });
+  }, 30_000);
+}
+
+/**
+ * Stop the thumbnail cleanup interval (for graceful shutdown)
+ */
+export function stopThumbnailCleanup(): void {
+  if (cleanupIntervalId !== null) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+    console.log("[thumbnails] Cleanup interval stopped");
+  }
+}
+
+/**
+ * Check if cleanup interval is running (for monitoring)
+ */
+export function isThumbnailCleanupRunning(): boolean {
+  return cleanupIntervalId !== null;
+}
+
+/**
+ * Get thumbnail cleanup stats for monitoring
+ */
+export function getThumbnailCleanupStats(): {
+  isRunning: boolean;
+  lastCleanupTime: number;
+  lastCleanupStats: { deleted: number; duration: number } | null;
+  intervalMs: number;
+} {
+  return {
+    isRunning: cleanupIntervalId !== null,
+    lastCleanupTime,
+    lastCleanupStats,
+    intervalMs: CLEANUP_INTERVAL_MS,
+  };
+}
