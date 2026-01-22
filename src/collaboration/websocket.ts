@@ -81,6 +81,9 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
     return; // Rate limited, message already sent to client
   }
 
+  // Update activity timestamp for stale connection detection
+  roomManager.updateActivity(wrappedWs);
+
   try {
     const data = JSON.parse(message.toString()) as ClientMessage;
 

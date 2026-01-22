@@ -30,6 +30,8 @@ interface ConnectionState {
   diagramId: string | null;
   pingInterval?: ReturnType<typeof setInterval>;
   rateLimit: RateLimitState;
+  /** Timestamp of last activity (message received) */
+  lastActivity: number;
 }
 
 class RoomManager {
@@ -41,15 +43,17 @@ class RoomManager {
    * Register a new WebSocket connection
    */
   registerConnection(ws: WebSocketConnection): void {
+    const now = Date.now();
     const state: ConnectionState = {
       ws,
       participantId: nanoid(8),
       diagramId: null,
       rateLimit: {
         messageCount: 0,
-        windowStart: Date.now(),
+        windowStart: now,
         warnings: 0,
       },
+      lastActivity: now,
     };
     this.connections.set(ws, state);
 
@@ -294,16 +298,38 @@ class RoomManager {
     rooms: number;
     connections: number;
     totalParticipants: number;
+    staleConnections: number;
+    avgConnectionAgeMs: number;
   } {
     let totalParticipants = 0;
     for (const room of this.rooms.values()) {
       totalParticipants += room.participants.size;
     }
 
+    // Calculate connection health metrics
+    const now = Date.now();
+    let staleConnections = 0;
+    let totalAge = 0;
+
+    for (const [ws, state] of this.connections) {
+      const age = now - state.lastActivity;
+      totalAge += age;
+
+      if (age > COLLAB_CONFIG.CONNECTION_STALE_TIMEOUT_MS || ws.readyState !== 1) {
+        staleConnections++;
+      }
+    }
+
+    const avgAge = this.connections.size > 0
+      ? Math.round(totalAge / this.connections.size)
+      : 0;
+
     return {
       rooms: this.rooms.size,
       connections: this.connections.size,
       totalParticipants,
+      staleConnections,
+      avgConnectionAgeMs: avgAge,
     };
   }
 
@@ -322,12 +348,19 @@ class RoomManager {
   }
 
   /**
-   * Clean up inactive participants
+   * Clean up inactive participants and stale connections
+   *
+   * This handles two scenarios:
+   * 1. Participants who haven't sent activity within PRESENCE_TIMEOUT_MS
+   * 2. Connections that are stale (no activity within CONNECTION_STALE_TIMEOUT_MS)
+   *    This catches orphaned connections where handleDisconnect() was never called
    */
-  cleanupInactive(): number {
-    let cleaned = 0;
+  cleanupInactive(): { participants: number; connections: number } {
+    let cleanedParticipants = 0;
+    let cleanedConnections = 0;
     const now = Date.now();
 
+    // 1. Clean up inactive participants from rooms
     for (const [diagramId, room] of this.rooms) {
       for (const [participantId, participant] of room.participants) {
         if (now - participant.lastSeen > COLLAB_CONFIG.PRESENCE_TIMEOUT_MS) {
@@ -338,7 +371,7 @@ class RoomManager {
             participantId,
           });
 
-          cleaned++;
+          cleanedParticipants++;
         }
       }
 
@@ -348,11 +381,49 @@ class RoomManager {
       }
     }
 
-    if (cleaned > 0) {
-      console.log(`[collab] Cleaned up ${cleaned} inactive participants`);
+    // 2. Clean up stale connections (where handleDisconnect was never called)
+    // This prevents memory leaks from orphaned pingIntervals
+    const staleThreshold = COLLAB_CONFIG.CONNECTION_STALE_TIMEOUT_MS;
+    const staleConnections: WebSocketConnection[] = [];
+
+    for (const [ws, state] of this.connections) {
+      const age = now - state.lastActivity;
+
+      // Check if connection is stale or WebSocket is already closed
+      if (age > staleThreshold || ws.readyState !== 1) {
+        staleConnections.push(ws);
+      }
     }
 
-    return cleaned;
+    // Force-close stale connections (this clears their intervals)
+    for (const ws of staleConnections) {
+      const state = this.connections.get(ws);
+      if (state) {
+        console.log(
+          `[collab] Cleaning up stale connection: ${state.participantId} (age: ${now - state.lastActivity}ms)`
+        );
+      }
+      this.handleDisconnect(ws);
+      cleanedConnections++;
+    }
+
+    if (cleanedParticipants > 0 || cleanedConnections > 0) {
+      console.log(
+        `[collab] Cleanup: ${cleanedParticipants} inactive participants, ${cleanedConnections} stale connections`
+      );
+    }
+
+    return { participants: cleanedParticipants, connections: cleanedConnections };
+  }
+
+  /**
+   * Update last activity timestamp for a connection (call on each message received)
+   */
+  updateActivity(ws: WebSocketConnection): void {
+    const state = this.connections.get(ws);
+    if (state) {
+      state.lastActivity = Date.now();
+    }
   }
 
   /**
@@ -471,7 +542,52 @@ class RoomManager {
 // Singleton instance
 export const roomManager = new RoomManager();
 
-// Start cleanup interval
-setInterval(() => {
-  roomManager.cleanupInactive();
-}, COLLAB_CONFIG.PRESENCE_TIMEOUT_MS / 2);
+// Cleanup interval management
+let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Start the cleanup interval (idempotent)
+ */
+function startCleanupInterval(): void {
+  if (cleanupIntervalId !== null) return;
+
+  cleanupIntervalId = setInterval(() => {
+    try {
+      roomManager.cleanupInactive();
+    } catch (err) {
+      // Log error but don't crash - cleanup is best-effort
+      console.error(
+        "[collab] Cleanup failed:",
+        err instanceof Error ? err.message : err
+      );
+    }
+  }, COLLAB_CONFIG.PRESENCE_TIMEOUT_MS / 2);
+
+  // Unref to allow process to exit even if interval is running
+  if (typeof cleanupIntervalId === "object" && "unref" in cleanupIntervalId) {
+    cleanupIntervalId.unref();
+  }
+
+  console.log("[collab] Cleanup interval started");
+}
+
+/**
+ * Stop the cleanup interval (for graceful shutdown)
+ */
+export function stopCollabCleanup(): void {
+  if (cleanupIntervalId !== null) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+    console.log("[collab] Cleanup interval stopped");
+  }
+}
+
+/**
+ * Check if cleanup interval is running (for monitoring)
+ */
+export function isCleanupRunning(): boolean {
+  return cleanupIntervalId !== null;
+}
+
+// Auto-start cleanup on module load
+startCleanupInterval();

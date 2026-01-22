@@ -5,4 +5,4 @@
 
 export * from "./types";
 export * from "./websocket";
-export { roomManager } from "./room-manager";
+export { roomManager, stopCollabCleanup, isCleanupRunning } from "./room-manager";

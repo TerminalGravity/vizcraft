@@ -59,6 +59,10 @@ export const COLLAB_CONFIG = {
   // Presence timeout - consider participant inactive after this
   PRESENCE_TIMEOUT_MS: 30_000,
 
+  // Connection stale timeout - force-close connections with no activity
+  // Should be longer than PRESENCE_TIMEOUT to give clients time to reconnect
+  CONNECTION_STALE_TIMEOUT_MS: 90_000, // 90 seconds (3x presence timeout)
+
   // Ping interval to keep connection alive
   PING_INTERVAL_MS: 15_000,
 

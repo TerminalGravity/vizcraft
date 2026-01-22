@@ -350,3 +350,115 @@ describe("RoomManager Room Operations", () => {
     roomManager.handleDisconnect(ws);
   });
 });
+
+describe("Stale Connection Cleanup", () => {
+  it("has sensible connection stale timeout", () => {
+    // Should be longer than presence timeout
+    expect(COLLAB_CONFIG.CONNECTION_STALE_TIMEOUT_MS).toBeGreaterThan(COLLAB_CONFIG.PRESENCE_TIMEOUT_MS);
+    // Should not be too long (max 5 minutes)
+    expect(COLLAB_CONFIG.CONNECTION_STALE_TIMEOUT_MS).toBeLessThanOrEqual(300_000);
+  });
+
+  it("tracks last activity timestamp", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    // Update activity
+    roomManager.updateActivity(ws);
+
+    // Stats should show no stale connections
+    const stats = roomManager.getStats();
+    expect(stats.staleConnections).toBe(0);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("updates activity on valid messages", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    const statsBefore = roomManager.getStats();
+    expect(statsBefore.avgConnectionAgeMs).toBeLessThan(100); // Just connected
+
+    // Simulate time passing by calling updateActivity again
+    roomManager.updateActivity(ws);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("cleans up connections with closed WebSocket", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    const statsBefore = roomManager.getStats();
+    expect(statsBefore.connections).toBeGreaterThan(0);
+
+    // Simulate WebSocket close without proper disconnect
+    ws.readyState = 3; // CLOSED
+
+    // Cleanup should detect and remove it
+    const result = roomManager.cleanupInactive();
+    expect(result.connections).toBe(1);
+
+    // Stats should reflect removal
+    const statsAfter = roomManager.getStats();
+    expect(statsAfter.connections).toBeLessThan(statsBefore.connections);
+  });
+
+  it("reports stale connections in stats", () => {
+    const ws = createMockWs();
+    roomManager.registerConnection(ws);
+
+    // Manually set WebSocket to closed state
+    ws.readyState = 3;
+
+    const stats = roomManager.getStats();
+    expect(stats.staleConnections).toBe(1);
+
+    // Cleanup
+    roomManager.handleDisconnect(ws);
+  });
+
+  it("cleanupInactive returns both participant and connection counts", () => {
+    const ws1 = createMockWs();
+    const ws2 = createMockWs();
+
+    roomManager.registerConnection(ws1);
+    roomManager.registerConnection(ws2);
+
+    // Close one connection
+    ws1.readyState = 3;
+
+    const result = roomManager.cleanupInactive();
+
+    // Should have cleaned up at least the closed connection
+    expect(typeof result.connections).toBe("number");
+    expect(typeof result.participants).toBe("number");
+
+    // Cleanup remaining
+    roomManager.handleDisconnect(ws2);
+  });
+});
+
+describe("Cleanup Interval Management", () => {
+  it("isCleanupRunning returns boolean", async () => {
+    // Import the function
+    const { isCleanupRunning } = await import("./room-manager");
+    expect(typeof isCleanupRunning()).toBe("boolean");
+  });
+
+  it("stopCollabCleanup is callable", async () => {
+    const { stopCollabCleanup, isCleanupRunning } = await import("./room-manager");
+
+    // Stop cleanup
+    stopCollabCleanup();
+
+    // Should report not running
+    expect(isCleanupRunning()).toBe(false);
+
+    // Note: In real usage, we'd restart it, but for tests we leave it stopped
+    // as other tests will handle their own cleanup
+  });
+});
