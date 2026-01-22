@@ -208,3 +208,10 @@ export const listCache = new LRUCache<unknown>({
   maxSizeBytes: 10 * 1024 * 1024, // 10MB for list results
   ttlMs: 30 * 1000, // 30 seconds (lists change frequently)
 });
+
+// SVG export cache - keyed by diagramId:version for automatic invalidation
+export const svgCache = new LRUCache<string>({
+  maxEntries: 200,
+  maxSizeBytes: 20 * 1024 * 1024, // 20MB for SVG strings (avg 100KB per SVG)
+  ttlMs: 5 * 60 * 1000, // 5 minutes
+});

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "bun:test";
-import { LRUCache, generateETag, matchesETag } from "./cache";
+import { LRUCache, generateETag, matchesETag, svgCache, diagramCache, listCache } from "./cache";
 
 describe("LRUCache", () => {
   let cache: LRUCache<string>;
@@ -132,5 +132,56 @@ describe("ETag utilities", () => {
     const etag = '"abc123"';
     expect(matchesETag('"xyz", "abc123", "def"', etag)).toBe(true);
     expect(matchesETag('"xyz", "def"', etag)).toBe(false);
+  });
+});
+
+describe("Global Cache Instances", () => {
+  it("exports diagramCache", () => {
+    expect(diagramCache).toBeDefined();
+    const stats = diagramCache.getStats();
+    expect(stats).toHaveProperty("entries");
+    expect(stats).toHaveProperty("sizeBytes");
+    expect(stats).toHaveProperty("hitRate");
+  });
+
+  it("exports listCache", () => {
+    expect(listCache).toBeDefined();
+    const stats = listCache.getStats();
+    expect(stats).toHaveProperty("entries");
+    expect(stats).toHaveProperty("hitRate");
+  });
+
+  it("exports svgCache for SVG export caching", () => {
+    expect(svgCache).toBeDefined();
+    const stats = svgCache.getStats();
+    expect(stats).toHaveProperty("entries");
+    expect(stats).toHaveProperty("sizeBytes");
+  });
+
+  it("svgCache stores and retrieves SVG strings", () => {
+    const testKey = "svg:test-123:1";
+    const testSvg = "<svg><rect/></svg>";
+
+    svgCache.set(testKey, testSvg);
+    expect(svgCache.get(testKey)).toBe(testSvg);
+
+    // Cleanup
+    svgCache.delete(testKey);
+  });
+
+  it("svgCache supports invalidatePattern for cleanup", () => {
+    svgCache.set("svg:diagram-a:1", "<svg>a</svg>");
+    svgCache.set("svg:diagram-a:2", "<svg>a2</svg>");
+    svgCache.set("svg:diagram-b:1", "<svg>b</svg>");
+
+    // Invalidate all versions of diagram-a
+    svgCache.invalidatePattern(/^svg:diagram-a:/);
+
+    expect(svgCache.get("svg:diagram-a:1")).toBeUndefined();
+    expect(svgCache.get("svg:diagram-a:2")).toBeUndefined();
+    expect(svgCache.get("svg:diagram-b:1")).toBe("<svg>b</svg>");
+
+    // Cleanup
+    svgCache.delete("svg:diagram-b:1");
   });
 });

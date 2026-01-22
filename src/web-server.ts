@@ -16,6 +16,7 @@ import { diffSpecs, generateChangelog, type DiagramDiff } from "./versioning";
 import {
   diagramCache,
   listCache,
+  svgCache,
   generateETag,
   matchesETag,
   getSpecComplexity,
@@ -566,9 +567,11 @@ app.delete("/api/diagrams/:id", async (c) => {
   try {
     const id = c.req.param("id");
 
-    // Invalidate cache BEFORE delete for stronger consistency
+    // Invalidate caches BEFORE delete for stronger consistency
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
+    // Clean up any cached SVG exports for this diagram
+    svgCache.invalidatePattern(new RegExp(`^svg:${id}:`));
 
     const deleted = await storage.deleteDiagram(id);
     if (!deleted) {
@@ -976,21 +979,25 @@ app.get("/api/performance/stats", rateLimiters.admin, (c) => {
   try {
     const diagramStats = diagramCache.getStats();
     const listStats = listCache.getStats();
+    const svgStats = svgCache.getStats();
+
+    const totalEntries = diagramStats.entries + listStats.entries + svgStats.entries;
+    const totalSize = diagramStats.sizeBytes + listStats.sizeBytes + svgStats.sizeBytes;
+    const totalHits = diagramStats.hits + listStats.hits + svgStats.hits;
+    const totalMisses = diagramStats.misses + listStats.misses + svgStats.misses;
 
     return c.json({
       cache: {
         diagrams: diagramStats,
         lists: listStats,
+        svg: svgStats,
         total: {
-          entries: diagramStats.entries + listStats.entries,
-          sizeBytes: diagramStats.sizeBytes + listStats.sizeBytes,
-          sizeMB: ((diagramStats.sizeBytes + listStats.sizeBytes) / 1024 / 1024).toFixed(2),
-          hits: diagramStats.hits + listStats.hits,
-          misses: diagramStats.misses + listStats.misses,
-          hitRate: (
-            (diagramStats.hits + listStats.hits) /
-            Math.max(1, diagramStats.hits + listStats.hits + diagramStats.misses + listStats.misses)
-          ).toFixed(3),
+          entries: totalEntries,
+          sizeBytes: totalSize,
+          sizeMB: (totalSize / 1024 / 1024).toFixed(2),
+          hits: totalHits,
+          misses: totalMisses,
+          hitRate: (totalHits / Math.max(1, totalHits + totalMisses)).toFixed(3),
         },
       },
       memory: {
@@ -1011,7 +1018,8 @@ app.post("/api/performance/clear-cache", rateLimiters.admin, (c) => {
   try {
     diagramCache.clear();
     listCache.clear();
-    console.log("[performance] All caches cleared");
+    svgCache.clear();
+    console.log("[performance] All caches cleared (diagrams, lists, svg)");
     return operationResponse(c, true, "All caches cleared");
   } catch (err) {
     console.error("POST /api/performance/clear-cache error:", err);
@@ -1489,7 +1497,7 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
   }
 });
 
-// Export diagram as SVG (server-side generation, rate limited)
+// Export diagram as SVG (server-side generation, rate limited, cached)
 app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
   try {
     const id = c.req.param("id");
@@ -1501,18 +1509,35 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
-    const rawSvg = generateSVG(diagram.spec);
-    // Apply defense-in-depth sanitization
-    const svg = sanitizeSvgOutput(rawSvg);
+    // Check SVG cache (keyed by diagramId:version for automatic invalidation)
+    const cacheKey = `svg:${id}:${diagram.version}`;
+    let svg = svgCache.get(cacheKey);
+    let cacheStatus = "HIT";
+
+    if (!svg) {
+      // Generate and sanitize SVG
+      const rawSvg = generateSVG(diagram.spec);
+      svg = sanitizeSvgOutput(rawSvg);
+      // Cache with actual byte size for accurate memory tracking
+      const sizeBytes = new TextEncoder().encode(svg).length;
+      svgCache.set(cacheKey, svg, sizeBytes);
+      cacheStatus = "MISS";
+    }
+
     // Sanitize filename
     const safeName = diagram.name.replace(/[^a-zA-Z0-9-_]/g, "_");
     // Get security headers for SVG content
     const secHeaders = getSvgSecurityHeaders();
+    // Use version-based ETag for client caching
+    const etag = `"svg-v${diagram.version}"`;
+
     return new Response(svg, {
       headers: {
         ...secHeaders,
         "Content-Disposition": `attachment; filename="${safeName}.svg"`,
-        "Cache-Control": "no-cache",
+        "Cache-Control": "private, max-age=300", // 5 min client cache
+        "ETag": etag,
+        "X-Cache": cacheStatus,
       },
     });
   } catch (err) {
