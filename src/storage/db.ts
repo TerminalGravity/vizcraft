@@ -120,17 +120,26 @@ export const storage = {
   },
 
   listDiagrams(project?: string): Diagram[] {
-    const query = project
-      ? db.query<{ id: string; name: string; project: string; spec: string; thumbnail_url: string | null; created_at: string; updated_at: string }, [string]>(
+    // Define row type for query results
+    type DiagramRow = {
+      id: string;
+      name: string;
+      project: string;
+      spec: string;
+      thumbnail_url: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+
+    const rows: DiagramRow[] = project
+      ? db.query<DiagramRow, [string]>(
           `SELECT * FROM diagrams WHERE project = ? ORDER BY updated_at DESC`
-        )
-      : db.query<{ id: string; name: string; project: string; spec: string; thumbnail_url: string | null; created_at: string; updated_at: string }, []>(
+        ).all(project)
+      : db.query<DiagramRow, []>(
           `SELECT * FROM diagrams ORDER BY updated_at DESC`
-        );
+        ).all();
 
-    const rows = project ? query.all(project) : (query as any).all();
-
-    return rows.map((row: any) => ({
+    return rows.map((row) => ({
       id: row.id,
       name: row.name,
       project: row.project,

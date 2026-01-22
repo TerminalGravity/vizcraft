@@ -7,6 +7,7 @@
 
 import { roomManager } from "./room-manager";
 import type { ClientMessage } from "./types";
+import type { Server } from "bun";
 
 // Track WebSocket to ServerWebSocket mapping for Bun
 type BunWebSocket = {
@@ -17,9 +18,16 @@ type BunWebSocket = {
 };
 
 /**
+ * Bun server with WebSocket support
+ */
+type BunServerWithWS = Server & {
+  upgrade: (req: Request, options?: { data?: unknown }) => boolean;
+};
+
+/**
  * Handle WebSocket upgrade request
  */
-export function handleWebSocketUpgrade(req: Request, server: any): Response | undefined {
+export function handleWebSocketUpgrade(req: Request, server: BunServerWithWS): Response | undefined {
   const url = new URL(req.url);
 
   // Only handle /ws/collab path
