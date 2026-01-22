@@ -104,7 +104,9 @@ function getBestEncoding(
   const encodings = acceptEncoding
     .split(",")
     .map((e) => {
-      const [name, q] = e.trim().split(";q=");
+      const parts = e.trim().split(";q=");
+      const name = parts[0] ?? "";
+      const q = parts[1];
       return {
         name: name.trim().toLowerCase(),
         quality: q ? parseFloat(q) : 1.0,
@@ -245,7 +247,7 @@ export function customCompression(
     // Check if response should be compressed
     const contentType = c.res.headers.get("Content-Type");
     const contentLength = c.res.headers.get("Content-Length");
-    const acceptEncoding = c.req.header("Accept-Encoding");
+    const acceptEncoding = c.req.header("Accept-Encoding") ?? null;
 
     // Skip if already has Content-Encoding (already compressed)
     if (c.res.headers.get("Content-Encoding")) {

@@ -7,7 +7,7 @@
  * - Error handling utilities
  */
 
-import { Context, Next } from "hono";
+import type { Context, Next } from "hono";
 import { z } from "zod";
 import { protectedStorage as storage } from "../storage/protected-storage";
 import type { Diagram } from "../types";

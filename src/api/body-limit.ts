@@ -122,7 +122,6 @@ export function bodyLimit(
           body: body,
         });
 
-        // @ts-expect-error - Hono's internal request override
         c.req.raw = newReq;
       }
 
