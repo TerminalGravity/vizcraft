@@ -187,19 +187,26 @@ app.get("/api/health/ready", async (c) => {
   return c.json(result, result.ready ? 200 : 503);
 });
 
-// List diagrams with pagination and caching
+// List diagrams with SQL-level pagination, sorting, search, and filtering
 app.get("/api/diagrams", (c) => {
   try {
+    // Parse query parameters
     const project = c.req.query("project");
     const limitParam = c.req.query("limit");
     const offsetParam = c.req.query("offset");
+    const sortBy = c.req.query("sortBy") as "createdAt" | "updatedAt" | "name" | undefined;
+    const sortOrder = c.req.query("sortOrder") as "asc" | "desc" | undefined;
+    const search = c.req.query("search");
+    const typesParam = c.req.query("types"); // Comma-separated: "flowchart,architecture"
     const minimal = c.req.query("minimal") === "true";
 
-    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
-    const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
+    // Validate and parse parameters
+    const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100) : 50;
+    const offset = offsetParam ? Math.max(parseInt(offsetParam, 10), 0) : 0;
+    const types = typesParam ? typesParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
 
-    // Check cache for list results
-    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${minimal}`;
+    // Build cache key from all parameters
+    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${minimal}`;
     const cached = listCache.get(cacheKey);
     if (cached) {
       const etag = generateETag(cached);
@@ -211,26 +218,59 @@ app.get("/api/diagrams", (c) => {
       return c.json(cached);
     }
 
-    const allDiagrams = storage.listDiagrams(project);
+    // Use SQL-level pagination for better performance
+    const { data: diagrams, total } = storage.listDiagramsPaginated({
+      project,
+      limit,
+      offset,
+      sortBy,
+      sortOrder,
+      search,
+      types,
+    });
+
     const projects = storage.listProjects();
-    const total = allDiagrams.length;
-    const paginated = allDiagrams.slice(offset, offset + limit);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(total / limit);
+    const currentPage = Math.floor(offset / limit) + 1;
+    const hasNextPage = offset + limit < total;
+    const hasPrevPage = offset > 0;
 
     const response = {
-      count: paginated.length,
+      count: diagrams.length,
       total,
       offset,
       limit,
-      diagrams: paginated.map((d) => ({
+      // Pagination helpers
+      pagination: {
+        currentPage,
+        totalPages,
+        hasNextPage,
+        hasPrevPage,
+        nextOffset: hasNextPage ? offset + limit : null,
+        prevOffset: hasPrevPage ? Math.max(offset - limit, 0) : null,
+      },
+      // Query parameters echoed back
+      query: {
+        project: project || null,
+        sortBy: sortBy || "updatedAt",
+        sortOrder: sortOrder || "desc",
+        search: search || null,
+        types: types || null,
+      },
+      diagrams: diagrams.map((d) => ({
         id: d.id,
         name: d.name,
         project: d.project,
+        type: d.spec.type,
         // Skip spec in minimal mode for faster list loading
         ...(minimal
           ? { nodeCount: d.spec.nodes?.length ?? 0 }
           : { spec: d.spec }),
         // Return URL to thumbnail endpoint (client handles 404 for missing thumbnails)
         thumbnailUrl: `/api/diagrams/${d.id}/thumbnail`,
+        createdAt: d.createdAt,
         updatedAt: d.updatedAt,
       })),
       projects,

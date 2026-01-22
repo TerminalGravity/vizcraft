@@ -168,6 +168,10 @@ export const storage = {
     return result.changes > 0;
   },
 
+  /**
+   * List diagrams with optional pagination and filtering
+   * @deprecated Use listDiagramsPaginated for large datasets
+   */
   listDiagrams(project?: string): Diagram[] {
     // Define row type for query results
     type DiagramRow = {
@@ -197,6 +201,116 @@ export const storage = {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));
+  },
+
+  /**
+   * List diagrams with SQL-level pagination for better performance
+   */
+  listDiagramsPaginated(options: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    sortBy?: "createdAt" | "updatedAt" | "name";
+    sortOrder?: "asc" | "desc";
+    search?: string;
+    types?: string[];
+  } = {}): { data: Diagram[]; total: number } {
+    const {
+      project,
+      limit = 20,
+      offset = 0,
+      sortBy = "updatedAt",
+      sortOrder = "desc",
+      search,
+      types,
+    } = options;
+
+    // Build WHERE conditions
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (project) {
+      conditions.push("project = ?");
+      params.push(project);
+    }
+
+    if (search) {
+      // Case-insensitive search in name
+      conditions.push("LOWER(name) LIKE LOWER(?)");
+      params.push(`%${search}%`);
+    }
+
+    if (types && types.length > 0) {
+      // Filter by diagram type (stored in spec.type)
+      const typePlaceholders = types.map(() => "?").join(", ");
+      conditions.push(`json_extract(spec, '$.type') IN (${typePlaceholders})`);
+      params.push(...types);
+    }
+
+    const whereClause = conditions.length > 0
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    // Map sortBy to column names
+    const sortColumn = sortBy === "createdAt"
+      ? "created_at"
+      : sortBy === "name"
+      ? "name"
+      : "updated_at";
+
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as total FROM diagrams ${whereClause}`;
+    const countRow = db.query<{ total: number }, (string | number)[]>(countQuery).get(...params);
+    const total = countRow?.total ?? 0;
+
+    // Get paginated data
+    const dataQuery = `
+      SELECT * FROM diagrams
+      ${whereClause}
+      ORDER BY ${sortColumn} ${sortOrder.toUpperCase()}
+      LIMIT ? OFFSET ?
+    `;
+
+    type DiagramRow = {
+      id: string;
+      name: string;
+      project: string;
+      spec: string;
+      thumbnail_url: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+
+    const rows = db.query<DiagramRow, (string | number)[]>(dataQuery)
+      .all(...params, limit, offset);
+
+    const data = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      project: row.project,
+      spec: JSON.parse(row.spec),
+      thumbnailUrl: row.thumbnail_url || undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+
+    return { data, total };
+  },
+
+  /**
+   * Count diagrams matching criteria
+   */
+  countDiagrams(project?: string): number {
+    if (project) {
+      const row = db.query<{ count: number }, [string]>(
+        `SELECT COUNT(*) as count FROM diagrams WHERE project = ?`
+      ).get(project);
+      return row?.count ?? 0;
+    }
+    const row = db.query<{ count: number }, []>(
+      `SELECT COUNT(*) as count FROM diagrams`
+    ).get();
+    return row?.count ?? 0;
   },
 
   // Versions
