@@ -72,8 +72,8 @@ const INCOMPRESSIBLE_TYPES = new Set([
  */
 function isCompressible(contentType: string | null): boolean {
   if (!contentType) return false;
-  // Extract base type without charset
-  const baseType = contentType.split(";")[0].trim().toLowerCase();
+  // Extract base type without charset (split always returns at least one element)
+  const baseType = (contentType.split(";")[0] ?? "").trim().toLowerCase();
 
   // Explicitly reject incompressible types (already compressed formats)
   if (INCOMPRESSIBLE_TYPES.has(baseType)) return false;
@@ -87,7 +87,7 @@ function isCompressible(contentType: string | null): boolean {
  */
 export function isIncompressible(contentType: string | null): boolean {
   if (!contentType) return false;
-  const baseType = contentType.split(";")[0].trim().toLowerCase();
+  const baseType = (contentType.split(";")[0] ?? "").trim().toLowerCase();
   return INCOMPRESSIBLE_TYPES.has(baseType);
 }
 

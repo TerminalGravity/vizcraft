@@ -100,8 +100,11 @@ function performCleanup(): void {
         .sort((a, b) => a[1].windowStart - b[1].windowStart);
       const toDelete = Math.floor(entries.length * 0.2);
       for (let i = 0; i < toDelete; i++) {
-        rateLimitStore.delete(entries[i][0]);
-        deleted++;
+        const entry = entries[i];
+        if (entry) {
+          rateLimitStore.delete(entry[0]);
+          deleted++;
+        }
       }
     }
 
