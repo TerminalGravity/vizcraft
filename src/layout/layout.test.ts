@@ -93,6 +93,136 @@ describe("Layout Engine", () => {
   });
 });
 
+describe("Layout Edge Cases", () => {
+  it("handles empty diagram (0 nodes)", async () => {
+    const emptySpec: DiagramSpec = {
+      type: "flowchart",
+      nodes: [],
+      edges: [],
+    };
+
+    const dagreResult = await layoutDiagram(emptySpec, { algorithm: "dagre" });
+    expect(dagreResult.success).toBe(true);
+    expect(dagreResult.spec?.nodes).toHaveLength(0);
+
+    const gridResult = await layoutDiagram(emptySpec, { algorithm: "grid" });
+    expect(gridResult.success).toBe(true);
+    expect(gridResult.spec?.nodes).toHaveLength(0);
+
+    const circularResult = await layoutDiagram(emptySpec, { algorithm: "circular" });
+    expect(circularResult.success).toBe(true);
+    expect(circularResult.spec?.nodes).toHaveLength(0);
+  });
+
+  it("handles single node diagram", async () => {
+    const singleNodeSpec: DiagramSpec = {
+      type: "flowchart",
+      nodes: [{ id: "only", label: "Only Node" }],
+      edges: [],
+    };
+
+    const dagreResult = await layoutDiagram(singleNodeSpec, { algorithm: "dagre" });
+    expect(dagreResult.success).toBe(true);
+    expect(dagreResult.spec?.nodes[0].position).toBeDefined();
+
+    const gridResult = await layoutDiagram(singleNodeSpec, { algorithm: "grid" });
+    expect(gridResult.success).toBe(true);
+    expect(gridResult.spec?.nodes[0].position).toBeDefined();
+
+    const circularResult = await layoutDiagram(singleNodeSpec, { algorithm: "circular" });
+    expect(circularResult.success).toBe(true);
+    expect(circularResult.spec?.nodes[0].position).toBeDefined();
+  });
+
+  it("handles large diagram (100+ nodes)", async () => {
+    const largeSpec: DiagramSpec = {
+      type: "flowchart",
+      nodes: Array.from({ length: 100 }, (_, i) => ({
+        id: `node-${i}`,
+        label: `Node ${i}`,
+      })),
+      edges: Array.from({ length: 99 }, (_, i) => ({
+        from: `node-${i}`,
+        to: `node-${i + 1}`,
+      })),
+    };
+
+    const result = await layoutDiagram(largeSpec, { algorithm: "dagre" });
+    expect(result.success).toBe(true);
+    expect(result.spec?.nodes).toHaveLength(100);
+    // All nodes should have positions
+    result.spec?.nodes.forEach((node) => {
+      expect(node.position).toBeDefined();
+      expect(typeof node.position?.x).toBe("number");
+      expect(typeof node.position?.y).toBe("number");
+      expect(Number.isNaN(node.position?.x)).toBe(false);
+      expect(Number.isNaN(node.position?.y)).toBe(false);
+    });
+  });
+
+  it("handles disconnected subgraphs", async () => {
+    const disconnectedSpec: DiagramSpec = {
+      type: "flowchart",
+      nodes: [
+        { id: "a1", label: "Group A - 1" },
+        { id: "a2", label: "Group A - 2" },
+        { id: "b1", label: "Group B - 1" },
+        { id: "b2", label: "Group B - 2" },
+      ],
+      edges: [
+        { from: "a1", to: "a2" },
+        { from: "b1", to: "b2" },
+        // No edges connecting groups A and B
+      ],
+    };
+
+    const result = await layoutDiagram(disconnectedSpec, { algorithm: "dagre" });
+    expect(result.success).toBe(true);
+    result.spec?.nodes.forEach((node) => {
+      expect(node.position).toBeDefined();
+    });
+  });
+
+  it("handles self-referential edges", async () => {
+    const selfRefSpec: DiagramSpec = {
+      type: "flowchart",
+      nodes: [
+        { id: "loop", label: "Self Loop" },
+        { id: "next", label: "Next" },
+      ],
+      edges: [
+        { from: "loop", to: "loop" }, // Self-referential
+        { from: "loop", to: "next" },
+      ],
+    };
+
+    const result = await layoutDiagram(selfRefSpec, { algorithm: "dagre" });
+    expect(result.success).toBe(true);
+    result.spec?.nodes.forEach((node) => {
+      expect(node.position).toBeDefined();
+    });
+  });
+
+  it("handles edges with non-existent node references gracefully", async () => {
+    const invalidEdgeSpec: DiagramSpec = {
+      type: "flowchart",
+      nodes: [
+        { id: "a", label: "A" },
+        { id: "b", label: "B" },
+      ],
+      edges: [
+        { from: "a", to: "b" },
+        { from: "a", to: "nonexistent" }, // Invalid reference
+      ],
+    };
+
+    // Should either succeed with valid nodes positioned or fail gracefully
+    const result = await layoutDiagram(invalidEdgeSpec, { algorithm: "dagre" });
+    // Layout should still work for valid nodes even if some edges are invalid
+    expect(result.spec?.nodes[0].position || result.success === false).toBeTruthy();
+  });
+});
+
 describe("Simple Layouts", () => {
   const graph = {
     nodes: [
@@ -141,5 +271,61 @@ describe("Simple Layouts", () => {
 
     // Allow some tolerance (nodes have different sizes at center vs edge)
     expect(maxDeviation).toBeLessThan(avgDistance * 0.5);
+  });
+
+  it("grid layout handles empty graph", () => {
+    const emptyGraph = { nodes: [], edges: [] };
+    const result = gridLayout(emptyGraph, { algorithm: "grid" });
+    expect(result.success).toBe(true);
+    expect(Object.keys(result.positions)).toHaveLength(0);
+  });
+
+  it("grid layout handles single node", () => {
+    const singleGraph = {
+      nodes: [{ id: "only", width: 100, height: 50 }],
+      edges: [],
+    };
+    const result = gridLayout(singleGraph, { algorithm: "grid" });
+    expect(result.success).toBe(true);
+    expect(result.positions["only"]).toBeDefined();
+    // Single node should have a valid numeric position
+    expect(typeof result.positions["only"].x).toBe("number");
+    expect(typeof result.positions["only"].y).toBe("number");
+    expect(Number.isNaN(result.positions["only"].x)).toBe(false);
+    expect(Number.isNaN(result.positions["only"].y)).toBe(false);
+  });
+
+  it("circular layout handles empty graph", () => {
+    const emptyGraph = { nodes: [], edges: [] };
+    const result = circularLayout(emptyGraph, { algorithm: "circular" });
+    expect(result.success).toBe(true);
+    expect(Object.keys(result.positions)).toHaveLength(0);
+  });
+
+  it("circular layout handles single node", () => {
+    const singleGraph = {
+      nodes: [{ id: "only", width: 100, height: 50 }],
+      edges: [],
+    };
+    const result = circularLayout(singleGraph, { algorithm: "circular" });
+    expect(result.success).toBe(true);
+    expect(result.positions["only"]).toBeDefined();
+  });
+
+  it("grid layout handles non-square counts", () => {
+    // 5 nodes should arrange in 3x2 grid (not perfectly square)
+    const fiveNodeGraph = {
+      nodes: [
+        { id: "a", width: 100, height: 50 },
+        { id: "b", width: 100, height: 50 },
+        { id: "c", width: 100, height: 50 },
+        { id: "d", width: 100, height: 50 },
+        { id: "e", width: 100, height: 50 },
+      ],
+      edges: [],
+    };
+    const result = gridLayout(fiveNodeGraph, { algorithm: "grid" });
+    expect(result.success).toBe(true);
+    expect(Object.keys(result.positions)).toHaveLength(5);
   });
 });
