@@ -42,3 +42,6 @@ data/diagrams/*
 !data/diagrams/.gitkeep
 !data/agents/.gitkeep
 .playwright-mcp/
+
+# Promotional content
+promo/
