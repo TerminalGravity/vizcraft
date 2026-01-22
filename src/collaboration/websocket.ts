@@ -7,7 +7,7 @@
 
 import { roomManager } from "./room-manager";
 import type { ClientMessage } from "./types";
-import { COLLAB_CONFIG } from "./types";
+import { COLLAB_CONFIG, validateClientMessage } from "./types";
 import type { Server } from "bun";
 
 // Track WebSocket to ServerWebSocket mapping for Bun
@@ -85,9 +85,35 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
   roomManager.updateActivity(wrappedWs);
 
   try {
-    const data = JSON.parse(message.toString()) as ClientMessage;
+    // Parse JSON first
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(message.toString());
+    } catch {
+      wrappedWs.send(JSON.stringify({
+        type: "error",
+        message: "Invalid JSON",
+        code: "INVALID_JSON",
+      }));
+      return;
+    }
 
-    // Validate change count for change messages
+    // Validate message structure with Zod
+    const validation = validateClientMessage(parsed);
+    if (!validation.success) {
+      console.warn(`[collab] Invalid message: ${validation.error}`);
+      wrappedWs.send(JSON.stringify({
+        type: "error",
+        message: validation.error,
+        code: "INVALID_MESSAGE",
+      }));
+      return;
+    }
+
+    const data = validation.message;
+
+    // Note: Change count validation is now handled by Zod schema (MAX_CHANGES_PER_MESSAGE)
+    // But we keep explicit check for better error messages
     if (data.type === "change" && data.changes) {
       if (data.changes.length > COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE) {
         console.warn(`[collab] Too many changes: ${data.changes.length} (max: ${COLLAB_CONFIG.RATE_LIMIT.MAX_CHANGES_PER_MESSAGE})`);
@@ -133,8 +159,8 @@ export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffe
     console.error("[collab] Error handling message:", err);
     wrappedWs.send(JSON.stringify({
       type: "error",
-      message: "Invalid message format",
-      code: "INVALID_MESSAGE",
+      message: "Internal error processing message",
+      code: "INTERNAL_ERROR",
     }));
   }
 }

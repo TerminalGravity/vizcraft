@@ -4,6 +4,8 @@
  * Types for real-time diagram collaboration via WebSockets
  */
 
+import { z } from "zod";
+
 export interface Participant {
   id: string;
   name: string;
@@ -52,6 +54,117 @@ export interface DiagramChange {
   action: "add_node" | "remove_node" | "update_node" | "add_edge" | "remove_edge" | "update_edge" | "update_style";
   target?: string; // Node or edge ID
   data?: unknown;
+}
+
+// ==================== Zod Validation Schemas ====================
+// Runtime validation for WebSocket messages (TypeScript types are compile-time only)
+
+const MAX_NAME_LENGTH = 100;
+const MAX_DIAGRAM_ID_LENGTH = 100;
+const MAX_NODE_ID_LENGTH = 100;
+const MAX_SELECTION_SIZE = 100;
+const MAX_CHANGES_PER_MESSAGE = 100;
+const COORDINATE_MIN = -1_000_000;
+const COORDINATE_MAX = 1_000_000;
+
+/**
+ * Diagram change validation
+ */
+const DiagramChangeSchema = z.object({
+  action: z.enum([
+    "add_node", "remove_node", "update_node",
+    "add_edge", "remove_edge", "update_edge",
+    "update_style",
+  ]),
+  target: z.string().max(MAX_NODE_ID_LENGTH).optional(),
+  data: z.unknown().optional(),
+});
+
+/**
+ * Join message schema
+ */
+const JoinMessageSchema = z.object({
+  type: z.literal("join"),
+  diagramId: z.string().min(1).max(MAX_DIAGRAM_ID_LENGTH),
+  name: z.string().max(MAX_NAME_LENGTH).default("Anonymous"),
+});
+
+/**
+ * Leave message schema
+ */
+const LeaveMessageSchema = z.object({
+  type: z.literal("leave"),
+});
+
+/**
+ * Cursor update message schema
+ */
+const CursorMessageSchema = z.object({
+  type: z.literal("cursor"),
+  x: z.number().min(COORDINATE_MIN).max(COORDINATE_MAX),
+  y: z.number().min(COORDINATE_MIN).max(COORDINATE_MAX),
+});
+
+/**
+ * Selection update message schema
+ */
+const SelectionMessageSchema = z.object({
+  type: z.literal("selection"),
+  nodeIds: z.array(z.string().max(MAX_NODE_ID_LENGTH)).max(MAX_SELECTION_SIZE),
+});
+
+/**
+ * Change message schema
+ */
+const ChangeMessageSchema = z.object({
+  type: z.literal("change"),
+  changes: z.array(DiagramChangeSchema).max(MAX_CHANGES_PER_MESSAGE),
+  baseVersion: z.number().int().min(0),
+});
+
+/**
+ * Ping message schema
+ */
+const PingMessageSchema = z.object({
+  type: z.literal("ping"),
+});
+
+/**
+ * Combined client message schema (discriminated union)
+ */
+export const ClientMessageSchema = z.discriminatedUnion("type", [
+  JoinMessageSchema,
+  LeaveMessageSchema,
+  CursorMessageSchema,
+  SelectionMessageSchema,
+  ChangeMessageSchema,
+  PingMessageSchema,
+]);
+
+/**
+ * Result of validating a client message
+ */
+export type ClientMessageValidationResult =
+  | { success: true; message: ClientMessage }
+  | { success: false; error: string };
+
+/**
+ * Validate a raw message and return typed result
+ */
+export function validateClientMessage(raw: unknown): ClientMessageValidationResult {
+  const result = ClientMessageSchema.safeParse(raw);
+
+  if (result.success) {
+    return { success: true, message: result.data as ClientMessage };
+  }
+
+  // Format error message
+  const errors = result.error.issues.map(issue => {
+    const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+    return `${path}${issue.message}`;
+  });
+
+  return { success: false, error: errors.join("; ") };
 }
 
 // Collaboration settings
