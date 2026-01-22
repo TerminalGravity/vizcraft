@@ -1,0 +1,633 @@
+/**
+ * Mermaid Export Tests
+ * Tests for converting Vizcraft diagrams to Mermaid format
+ */
+
+import { describe, it, expect } from "bun:test";
+import { exportToMermaid, getSupportedExportFormats } from "./mermaid-export";
+import type { DiagramSpec } from "../types";
+
+describe("exportToMermaid", () => {
+  describe("flowchart export", () => {
+    it("exports basic flowchart with nodes", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          { id: "a", label: "Start" },
+          { id: "b", label: "Process" },
+        ],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("flowchart TD");
+      expect(result).toContain("a[Start]");
+      expect(result).toContain("b[Process]");
+    });
+
+    it("exports flowchart with edges", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [{ from: "a", to: "b" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("a --> b");
+    });
+
+    it("exports flowchart with dashed edges", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [{ from: "a", to: "b", style: "dashed" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("a -.-> b");
+    });
+
+    it("exports flowchart with edge labels", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [{ from: "a", to: "b", label: "yes" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("|yes|");
+    });
+
+    it("exports diamond shape for decision nodes", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "decision", label: "Choice?", type: "diamond" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("{Choice?}");
+    });
+
+    it("exports circle shape", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "start", label: "Start", type: "circle" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("((Start))");
+    });
+
+    it("exports database/cylinder shape", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "db", label: "Database", type: "database" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("[(Database)]");
+    });
+
+    it("exports cloud shape", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "cloud", label: "Cloud", type: "cloud" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain(">Cloud]");
+    });
+
+    it("exports groups as subgraphs", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [],
+        groups: [{ id: "g1", label: "Group 1", nodeIds: ["a", "b"] }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("subgraph g1[Group 1]");
+      expect(result).toContain("end");
+    });
+
+    it("sanitizes node IDs with special characters", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "node-with-special.chars", label: "Test" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("node_with_special_chars");
+    });
+  });
+
+  describe("sequence diagram export", () => {
+    it("exports basic sequence diagram", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [
+          { id: "client", label: "Client" },
+          { id: "server", label: "Server" },
+        ],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("sequenceDiagram");
+      expect(result).toContain("participant client as Client");
+      expect(result).toContain("participant server as Server");
+    });
+
+    it("exports actors correctly", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [{ id: "user", label: "User", type: "actor" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("actor user as User");
+    });
+
+    it("exports sync messages", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [],
+        messages: [{ from: "a", to: "b", label: "request", type: "sync", order: 1 }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("a->>b: request");
+    });
+
+    it("exports async messages", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [],
+        messages: [{ from: "a", to: "b", label: "async call", type: "async", order: 1 }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("a->>b: async call");
+    });
+
+    it("exports return messages", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [],
+        messages: [{ from: "b", to: "a", label: "response", type: "return", order: 1 }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("b-->>a: response");
+    });
+
+    it("orders messages correctly", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [],
+        messages: [
+          { from: "a", to: "b", label: "second", type: "sync", order: 2 },
+          { from: "a", to: "b", label: "first", type: "sync", order: 1 },
+        ],
+      };
+
+      const result = exportToMermaid(spec);
+      const lines = result.split("\n");
+
+      const firstIndex = lines.findIndex((l) => l.includes("first"));
+      const secondIndex = lines.findIndex((l) => l.includes("second"));
+
+      expect(firstIndex).toBeLessThan(secondIndex);
+    });
+  });
+
+  describe("state diagram export", () => {
+    it("exports basic state diagram", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [
+          { id: "idle", label: "Idle" },
+          { id: "running", label: "Running" },
+        ],
+        edges: [{ from: "idle", to: "running" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("stateDiagram-v2");
+      expect(result).toContain("idle: Idle");
+      expect(result).toContain("idle --> running");
+    });
+
+    it("exports initial state", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [{ id: "start", label: "Start", type: "initial" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("[*] --> start");
+    });
+
+    it("exports final state transitions", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [
+          { id: "running", label: "Running" },
+          { id: "end", label: "End", type: "final" },
+        ],
+        edges: [{ from: "running", to: "end" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("running --> [*]");
+    });
+
+    it("exports choice states", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [{ id: "check", label: "Check", type: "choice" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("<<choice>>");
+    });
+
+    it("exports edge labels", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [{ from: "a", to: "b", label: "trigger" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain(": trigger");
+    });
+  });
+
+  describe("class diagram export", () => {
+    it("exports basic class", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [{ id: "Person", label: "Person" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("classDiagram");
+      expect(result).toContain("class Person {");
+    });
+
+    it("exports class with stereotype", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [{ id: "IService", label: "IService", stereotype: "interface" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("<<interface>>");
+    });
+
+    it("exports class with attributes", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          {
+            id: "User",
+            label: "User",
+            attributes: ["+name: string", "-age: number"],
+          },
+        ],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("+name: string");
+      expect(result).toContain("-age: number");
+    });
+
+    it("exports class with methods", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          {
+            id: "Service",
+            label: "Service",
+            methods: ["+process(): void", "#helper(): boolean"],
+          },
+        ],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("+process(): void");
+      expect(result).toContain("#helper(): boolean");
+    });
+
+    it("exports inheritance relationship", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          { id: "Animal", label: "Animal" },
+          { id: "Dog", label: "Dog" },
+        ],
+        edges: [{ from: "Dog", to: "Animal", label: "extends" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("--|>");
+    });
+
+    it("exports interface implementation with dashed line", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          { id: "IService", label: "IService" },
+          { id: "ServiceImpl", label: "ServiceImpl" },
+        ],
+        edges: [{ from: "ServiceImpl", to: "IService", label: "implements", style: "dashed" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("..|>");
+    });
+
+    it("exports composition relationship", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          { id: "Car", label: "Car" },
+          { id: "Engine", label: "Engine" },
+        ],
+        edges: [{ from: "Car", to: "Engine", label: "composition" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("*--");
+    });
+
+    it("exports aggregation relationship", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          { id: "Team", label: "Team" },
+          { id: "Player", label: "Player" },
+        ],
+        edges: [{ from: "Team", to: "Player", label: "aggregation" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("o--");
+    });
+  });
+
+  describe("ER diagram export", () => {
+    it("exports basic ER diagram", () => {
+      const spec: DiagramSpec = {
+        type: "er",
+        nodes: [{ id: "User", label: "User", type: "entity" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("erDiagram");
+      expect(result).toContain("User {");
+    });
+
+    it("exports entity with attributes", () => {
+      const spec: DiagramSpec = {
+        type: "er",
+        nodes: [
+          {
+            id: "User",
+            label: "User",
+            type: "entity",
+            attributes: ["id int PK", "email string"],
+          },
+        ],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("int id PK");
+      expect(result).toContain("string email");
+    });
+
+    it("exports 1:N relationship", () => {
+      const spec: DiagramSpec = {
+        type: "er",
+        nodes: [
+          { id: "User", label: "User", type: "entity" },
+          { id: "Post", label: "Post", type: "entity" },
+        ],
+        edges: [],
+        relationships: [
+          { entity1: "User", entity2: "Post", cardinality: "1:N", label: "creates" },
+        ],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("||--o{");
+      expect(result).toContain(": creates");
+    });
+
+    it("exports 1:1 relationship", () => {
+      const spec: DiagramSpec = {
+        type: "er",
+        nodes: [
+          { id: "User", label: "User", type: "entity" },
+          { id: "Profile", label: "Profile", type: "entity" },
+        ],
+        edges: [],
+        relationships: [{ entity1: "User", entity2: "Profile", cardinality: "1:1" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("||--||");
+    });
+
+    it("exports N:M relationship", () => {
+      const spec: DiagramSpec = {
+        type: "er",
+        nodes: [
+          { id: "Student", label: "Student", type: "entity" },
+          { id: "Course", label: "Course", type: "entity" },
+        ],
+        edges: [],
+        relationships: [{ entity1: "Student", entity2: "Course", cardinality: "N:M" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("}o--o{");
+    });
+  });
+
+  describe("mindmap export", () => {
+    it("exports basic mindmap with central node", () => {
+      const spec: DiagramSpec = {
+        type: "mindmap",
+        nodes: [{ id: "center", label: "Main Topic", type: "central" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("mindmap");
+      expect(result).toContain("root((Main Topic))");
+    });
+
+    it("exports mindmap with children", () => {
+      const spec: DiagramSpec = {
+        type: "mindmap",
+        nodes: [
+          { id: "center", label: "Topic", type: "central" },
+          { id: "branch1", label: "Branch 1" },
+          { id: "branch2", label: "Branch 2" },
+        ],
+        edges: [
+          { from: "center", to: "branch1" },
+          { from: "center", to: "branch2" },
+        ],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("Branch 1");
+      expect(result).toContain("Branch 2");
+    });
+  });
+
+  describe("default handling", () => {
+    it("exports architecture diagrams as flowcharts", () => {
+      const spec: DiagramSpec = {
+        type: "architecture",
+        nodes: [{ id: "api", label: "API Gateway" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("flowchart TD");
+    });
+
+    it("exports network diagrams as flowcharts", () => {
+      const spec: DiagramSpec = {
+        type: "network",
+        nodes: [{ id: "router", label: "Router" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("flowchart TD");
+    });
+
+    it("exports freeform diagrams as flowcharts", () => {
+      const spec: DiagramSpec = {
+        type: "freeform",
+        nodes: [{ id: "box", label: "Box" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("flowchart TD");
+    });
+  });
+});
+
+describe("getSupportedExportFormats", () => {
+  it("returns list of supported formats", () => {
+    const formats = getSupportedExportFormats();
+
+    expect(formats.length).toBeGreaterThanOrEqual(4);
+    expect(formats.some((f) => f.id === "mermaid")).toBe(true);
+    expect(formats.some((f) => f.id === "json")).toBe(true);
+    expect(formats.some((f) => f.id === "svg")).toBe(true);
+    expect(formats.some((f) => f.id === "png")).toBe(true);
+  });
+
+  it("each format has required properties", () => {
+    const formats = getSupportedExportFormats();
+
+    for (const format of formats) {
+      expect(format.id).toBeDefined();
+      expect(format.name).toBeDefined();
+      expect(format.extension).toBeDefined();
+      expect(format.extension.startsWith(".")).toBe(true);
+    }
+  });
+});
