@@ -471,9 +471,11 @@ export const storage = {
         const typePlaceholders = validTypes.map(() => "?").join(", ");
         conditions.push(`json_extract(spec, '$.type') IN (${typePlaceholders})`);
         params.push(...validTypes);
+      } else {
+        // User requested specific types but ALL were invalid/unknown
+        // Return empty result (no diagrams match nonexistent types)
+        return { data: [], total: 0 };
       }
-      // If no valid types remain after filtering, the condition is simply not added
-      // which returns all diagrams (rather than returning an error)
     }
 
     // Date range filters - SQLite stores ISO timestamps as TEXT which sort lexicographically
