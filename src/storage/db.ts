@@ -10,6 +10,11 @@ import { nanoid } from "nanoid";
 import type { Diagram, DiagramSpec, DiagramVersion } from "../types";
 import { safeParseSpec, VALID_DIAGRAM_TYPES } from "../validation/schemas";
 import {
+  validateSpecQuotas,
+  checkUserDiagramQuota,
+  QuotaExceededError,
+} from "./quotas";
+import {
   saveThumbnail,
   loadThumbnail,
   deleteThumbnail,
@@ -310,17 +315,47 @@ function parseFullRow(row: FullDiagramRow): Diagram {
 }
 
 export const storage = {
-  // Diagrams
+  /**
+   * Count diagrams owned by a user
+   */
+  countUserDiagrams(ownerId: string): number {
+    const result = db.query<{ count: number }, [string]>(
+      `SELECT COUNT(*) as count FROM diagrams WHERE owner_id = ?`
+    ).get(ownerId);
+    return result?.count ?? 0;
+  },
+
+  /**
+   * Create a new diagram with quota enforcement
+   *
+   * @throws QuotaExceededError if any quota is exceeded
+   */
   createDiagram(
     name: string,
     project: string,
     spec: DiagramSpec,
     options: { ownerId?: string; isPublic?: boolean } = {}
   ): Diagram {
+    const ownerId = options.ownerId ?? null;
+
+    // QUOTA CHECK 1: Validate spec complexity and size
+    const specValidation = validateSpecQuotas(spec);
+    if (!specValidation.valid) {
+      throw specValidation.error;
+    }
+
+    // QUOTA CHECK 2: Validate user diagram count
+    if (ownerId) {
+      const currentCount = this.countUserDiagrams(ownerId);
+      const userQuotaError = checkUserDiagramQuota(currentCount, ownerId);
+      if (userQuotaError) {
+        throw userQuotaError;
+      }
+    }
+
     const id = nanoid(12);
     const now = new Date().toISOString();
     const version = 1;
-    const ownerId = options.ownerId ?? null;
     const isPublic = options.isPublic ?? false;
 
     db.run(
@@ -356,12 +391,14 @@ export const storage = {
   },
 
   /**
-   * Update diagram with optional optimistic locking
+   * Update diagram with optional optimistic locking and quota enforcement
+   *
    * @param id - Diagram ID
    * @param spec - New diagram spec
    * @param message - Optional version message
    * @param baseVersion - Optional version to check for optimistic locking
    * @returns Updated diagram, null if not found, or { conflict: true, currentVersion: number } if version mismatch
+   * @throws QuotaExceededError if spec exceeds any quota
    */
   updateDiagram(
     id: string,
@@ -369,6 +406,12 @@ export const storage = {
     message?: string,
     baseVersion?: number
   ): Diagram | null | { conflict: true; currentVersion: number } {
+    // QUOTA CHECK: Validate spec complexity and size before update
+    const specValidation = validateSpecQuotas(spec);
+    if (!specValidation.valid) {
+      throw specValidation.error;
+    }
+
     const now = new Date().toISOString();
 
     // If baseVersion is provided, use optimistic locking
@@ -416,7 +459,7 @@ export const storage = {
   },
 
   /**
-   * Atomically transform a diagram with conflict retry
+   * Atomically transform a diagram with conflict retry and quota enforcement
    *
    * This is the safe way for server operations to update diagrams.
    * Reads the diagram, applies the transform, and saves with version check.
@@ -427,6 +470,7 @@ export const storage = {
    * @param message - Version message for the update
    * @param maxRetries - Maximum retry attempts on conflict (default: 3)
    * @returns Updated diagram, null if not found, or error info
+   * @throws QuotaExceededError if transformed spec exceeds any quota
    */
   transformDiagram(
     id: string,
@@ -447,6 +491,13 @@ export const storage = {
 
       // Apply transformation
       const transformedSpec = transform(current.spec);
+
+      // QUOTA CHECK: Validate transformed spec before attempting update
+      // This provides clearer error messages than failing in updateDiagram
+      const specValidation = validateSpecQuotas(transformedSpec);
+      if (!specValidation.valid) {
+        throw specValidation.error;
+      }
 
       // Attempt to save with version check
       const result = this.updateDiagram(id, transformedSpec, message, current.version);
