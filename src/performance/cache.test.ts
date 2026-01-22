@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "bun:test";
-import { LRUCache, generateETag, matchesETag, svgCache, diagramCache, listCache } from "./cache";
+import { LRUCache, generateETag, matchesETag, svgCache, diagramCache, listCache, estimateObjectSize } from "./cache";
 
 describe("LRUCache", () => {
   let cache: LRUCache<string>;
@@ -225,5 +225,104 @@ describe("Global Cache Instances", () => {
 
     // Cleanup
     svgCache.delete("svg:diagram-b:1");
+  });
+});
+
+describe("estimateObjectSize", () => {
+  it("handles primitives", () => {
+    expect(estimateObjectSize(null)).toBe(0);
+    expect(estimateObjectSize(undefined)).toBe(0);
+    expect(estimateObjectSize(true)).toBe(4);
+    expect(estimateObjectSize(42)).toBe(8);
+  });
+
+  it("estimates string size based on length", () => {
+    const shortStr = "abc";
+    const longStr = "a".repeat(1000);
+
+    const shortSize = estimateObjectSize(shortStr);
+    const longSize = estimateObjectSize(longStr);
+
+    // Short string should be small (header + 3 chars * 2 bytes)
+    expect(shortSize).toBeGreaterThan(0);
+    expect(shortSize).toBeLessThan(100);
+
+    // Long string should be proportionally larger
+    expect(longSize).toBeGreaterThan(shortSize * 10);
+  });
+
+  it("estimates array size", () => {
+    const emptyArray = estimateObjectSize([]);
+    const smallArray = estimateObjectSize([1, 2, 3]);
+    const largeArray = estimateObjectSize(Array(100).fill("test"));
+
+    expect(emptyArray).toBeGreaterThan(0); // Has overhead
+    expect(smallArray).toBeGreaterThan(emptyArray);
+    expect(largeArray).toBeGreaterThan(smallArray);
+  });
+
+  it("estimates object size including keys", () => {
+    const obj = {
+      shortKey: "value",
+      aVeryLongPropertyNameThatShouldBeCountedInSize: "x",
+    };
+
+    const size = estimateObjectSize(obj);
+    expect(size).toBeGreaterThan(100); // Should count key lengths
+  });
+
+  it("handles circular references without throwing", () => {
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+
+    // Should not throw
+    const size = estimateObjectSize(circular);
+    expect(size).toBeGreaterThan(0);
+    // Circular reference should not cause infinite loop
+    expect(size).toBeLessThan(10000);
+  });
+
+  it("handles Maps and Sets", () => {
+    const map = new Map([["key1", "value1"], ["key2", "value2"]]);
+    const set = new Set([1, 2, 3, "test"]);
+
+    const mapSize = estimateObjectSize(map);
+    const setSize = estimateObjectSize(set);
+
+    expect(mapSize).toBeGreaterThan(0);
+    expect(setSize).toBeGreaterThan(0);
+  });
+
+  it("handles Date objects", () => {
+    const date = new Date();
+    const size = estimateObjectSize(date);
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThan(100); // Dates are small
+  });
+
+  it("handles nested objects", () => {
+    const nested = {
+      level1: {
+        level2: {
+          level3: {
+            value: "deep",
+          },
+        },
+      },
+    };
+
+    const size = estimateObjectSize(nested);
+    expect(size).toBeGreaterThan(100); // Multiple object overheads + keys + value
+  });
+
+  it("handles TypedArrays", () => {
+    const buffer = new ArrayBuffer(1024);
+    const uint8 = new Uint8Array(100);
+
+    const bufferSize = estimateObjectSize(buffer);
+    const uint8Size = estimateObjectSize(uint8);
+
+    expect(bufferSize).toBeGreaterThan(1024); // Buffer + overhead
+    expect(uint8Size).toBeGreaterThan(100); // Array + overhead
   });
 });

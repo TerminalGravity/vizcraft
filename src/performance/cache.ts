@@ -5,6 +5,114 @@
  * automatic eviction when cache size exceeds limits.
  */
 
+// V8 object overhead constants (approximate)
+const OBJECT_OVERHEAD = 32; // Hidden class pointer + properties backing store
+const ARRAY_OVERHEAD = 24;  // Length + element backing store pointer
+const MAP_ENTRY_OVERHEAD = 16; // Key + value pointers
+const STRING_OVERHEAD = 20; // V8 string header
+
+/**
+ * Estimate the memory size of any JavaScript value in bytes.
+ * Handles circular references via WeakSet tracking.
+ * More accurate than JSON.stringify().length for memory management.
+ */
+export function estimateObjectSize(value: unknown, seen?: WeakSet<object>): number {
+  // Handle primitives
+  if (value === null || value === undefined) {
+    return 0;
+  }
+
+  const type = typeof value;
+
+  if (type === "boolean") {
+    return 4; // V8 uses 4 bytes for booleans
+  }
+
+  if (type === "number") {
+    return 8; // IEEE 754 double
+  }
+
+  if (type === "string") {
+    // V8 strings: header + 2 bytes per character (UTF-16)
+    return STRING_OVERHEAD + (value as string).length * 2;
+  }
+
+  if (type === "bigint") {
+    // BigInt: overhead + digits
+    const str = (value as bigint).toString();
+    return 16 + Math.ceil(str.length / 9) * 8;
+  }
+
+  if (type === "symbol" || type === "function") {
+    return 64; // Rough estimate for functions/symbols
+  }
+
+  // Handle objects (arrays, plain objects, Maps, Sets, etc.)
+  if (type === "object") {
+    // Initialize seen set for circular reference detection
+    const seenSet = seen ?? new WeakSet<object>();
+
+    // Circular reference check
+    if (seenSet.has(value as object)) {
+      return 0; // Already counted
+    }
+    seenSet.add(value as object);
+
+    // Arrays
+    if (Array.isArray(value)) {
+      let size = ARRAY_OVERHEAD;
+      for (const item of value) {
+        size += estimateObjectSize(item, seenSet);
+      }
+      return size;
+    }
+
+    // Maps
+    if (value instanceof Map) {
+      let size = OBJECT_OVERHEAD;
+      for (const [k, v] of value) {
+        size += MAP_ENTRY_OVERHEAD + estimateObjectSize(k, seenSet) + estimateObjectSize(v, seenSet);
+      }
+      return size;
+    }
+
+    // Sets
+    if (value instanceof Set) {
+      let size = OBJECT_OVERHEAD;
+      for (const item of value) {
+        size += MAP_ENTRY_OVERHEAD + estimateObjectSize(item, seenSet);
+      }
+      return size;
+    }
+
+    // Date
+    if (value instanceof Date) {
+      return 32; // Object overhead + timestamp
+    }
+
+    // ArrayBuffer / TypedArrays
+    if (value instanceof ArrayBuffer) {
+      return (value as ArrayBuffer).byteLength + 16;
+    }
+    if (ArrayBuffer.isView(value)) {
+      return (value as ArrayBufferView).byteLength + 24;
+    }
+
+    // Plain objects
+    let size = OBJECT_OVERHEAD;
+    for (const key in value) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        size += STRING_OVERHEAD + key.length * 2; // Key
+        size += estimateObjectSize((value as Record<string, unknown>)[key], seenSet); // Value
+      }
+    }
+    return size;
+  }
+
+  // Unknown type fallback
+  return 64;
+}
+
 interface CacheEntry<T> {
   value: T;
   timestamp: number;
@@ -178,12 +286,13 @@ export class LRUCache<T> {
     }
   }
 
+  /**
+   * Estimate the memory size of a value in bytes.
+   * Uses type-aware estimation that handles circular references
+   * without the overhead of JSON.stringify.
+   */
   private estimateSize(value: T): number {
-    try {
-      return JSON.stringify(value).length * 2; // Rough byte estimate
-    } catch {
-      return 1024; // Default 1KB for non-serializable
-    }
+    return estimateObjectSize(value);
   }
 }
 
