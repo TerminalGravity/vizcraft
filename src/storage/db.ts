@@ -1078,13 +1078,16 @@ export const storage = {
     let params: string[];
 
     if (userId) {
+      // Use GLOB instead of LIKE to prevent wildcard injection
+      // GLOB wildcards (* and ?) are not in our allowed userId character set
+      // whereas LIKE wildcards (% and _) could be exploited via underscore
       whereClause = `
-        WHERE (owner_id = ? OR owner_id IS NULL OR is_public = 1 OR shares LIKE ?)
+        WHERE (owner_id = ? OR owner_id IS NULL OR is_public = 1 OR shares GLOB ?)
         ${project ? "AND project = ?" : ""}
       `;
       params = project
-        ? [userId, `%"userId":"${userId}"%`, project]
-        : [userId, `%"userId":"${userId}"%`];
+        ? [userId, `*"userId":"${userId}"*`, project]
+        : [userId, `*"userId":"${userId}"*`];
     } else {
       // Anonymous user: only public diagrams or legacy diagrams
       whereClause = `

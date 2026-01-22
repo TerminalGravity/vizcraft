@@ -397,5 +397,41 @@ describe("Ownership", () => {
       // Should work and return public diagrams
       expect(Array.isArray(result.diagrams)).toBe(true);
     });
+
+    it("listDiagramsForUser prevents underscore wildcard injection", () => {
+      // Create diagram shared with "user-abc"
+      const diagram = storage.createDiagram("Underscore Test", "security-test", testSpec, {
+        ownerId: "attacker",
+        isPublic: false,
+      });
+      testIds.push(diagram.id);
+      storage.addShare(diagram.id, "user-abc", "viewer");
+
+      // User with underscore in ID should NOT see diagram shared with different user
+      // With LIKE, "user_abc" would match "user-abc" because _ is a wildcard
+      // With GLOB, it correctly requires exact match
+      const attackerResult = storage.listDiagramsForUser("user_abc");
+      const foundDiagram = attackerResult.diagrams.find((d) => d.id === diagram.id);
+
+      // The diagram should NOT be found because "user_abc" !== "user-abc"
+      expect(foundDiagram).toBeUndefined();
+    });
+
+    it("listDiagramsForUser correctly finds exact share match", () => {
+      // Create diagram shared with exact userId
+      const diagram = storage.createDiagram("Exact Match Test", "security-test", testSpec, {
+        ownerId: "owner-xyz",
+        isPublic: false,
+      });
+      testIds.push(diagram.id);
+      storage.addShare(diagram.id, "user_with_underscore", "viewer");
+
+      // Exact match should find the diagram
+      const result = storage.listDiagramsForUser("user_with_underscore");
+      const foundDiagram = result.diagrams.find((d) => d.id === diagram.id);
+
+      expect(foundDiagram).toBeDefined();
+      expect(foundDiagram!.shares?.some((s) => s.userId === "user_with_underscore")).toBe(true);
+    });
   });
 });
