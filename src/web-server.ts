@@ -40,6 +40,7 @@ import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
 import { rateLimiters } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
+import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
 import {
   withTimeout,
   TimeoutError,
@@ -103,6 +104,14 @@ app.use(
   })
 );
 app.use("*", logger());
+
+// Security headers
+app.use("*", securityHeaders({
+  isProduction: process.env.NODE_ENV === "production",
+}));
+
+// API-specific security headers (more restrictive)
+app.use("/api/*", apiSecurityHeaders());
 
 // Global error handler
 app.onError((err, c) => {
