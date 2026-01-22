@@ -9,6 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { storage } from "./storage/db";
 import type { DiagramSpec, DiagramChange } from "./types";
+import { sanitizeFilename, createSafeExportPath, validateExportPath } from "./utils/path-safety";
 
 const PORT = parseInt(process.env.PORT || "8420");
 const WEB_URL = process.env.WEB_URL || `http://localhost:3420`;
@@ -244,10 +245,27 @@ server.tool(
       };
     }
 
-    const basePath = path || `./data/exports/${diagram.name}-${id}`;
+    // Create safe export path - sanitize diagram name and validate path
+    const safeName = sanitizeFilename(`${diagram.name}-${id}`);
+    let exportPath: string;
+
+    try {
+      if (path) {
+        // User provided a path - validate and sanitize it
+        exportPath = validateExportPath(path, "./data/exports");
+        // Override extension based on format
+        exportPath = exportPath.replace(/\.[^.]+$/, "") + `.${format}`;
+      } else {
+        // Use default path with sanitized name
+        exportPath = createSafeExportPath(safeName, format, "./data/exports");
+      }
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ success: false, error: "Invalid export path" }) }],
+      };
+    }
 
     if (format === "json") {
-      const exportPath = `${basePath}.json`;
       await Bun.write(exportPath, JSON.stringify(diagram.spec, null, 2));
       return {
         content: [
@@ -271,7 +289,6 @@ server.tool(
         if (!response.ok) throw new Error("Failed to generate SVG");
 
         const svgContent = await response.text();
-        const exportPath = `${basePath}.svg`;
         await Bun.write(exportPath, svgContent);
 
         return {
