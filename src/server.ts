@@ -21,7 +21,7 @@ const WEB_URL = process.env.WEB_URL || `http://localhost:3420`;
  * MCP Tool Result type
  */
 interface MCPToolResult {
-  content: Array<{ type: string; text: string }>;
+  content: Array<{ type: "text"; text: string }>;
 }
 
 /**
@@ -267,18 +267,30 @@ server.tool(
     }
 
     const newSpec = spec || existing.spec;
-    // Use forceUpdate for MCP tools - Claude doesn't track versions
-    // and conflicts would be confusing in the LLM context
-    const updated = storage.forceUpdateDiagram(id, newSpec as DiagramSpec, message);
+    // MCP tools don't pass baseVersion - this allows force update without version checking
+    // (conflicts would be confusing in the LLM context)
+    const result = storage.updateDiagram(id, newSpec as DiagramSpec, message);
+
+    // Handle null (not found) or conflict cases
+    if (!result) {
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Update failed" }) }],
+      };
+    }
+    if ("conflict" in result) {
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Version conflict", currentVersion: result.currentVersion }) }],
+      };
+    }
 
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify(
             {
               success: true,
-              id: updated?.id,
+              id: result.id,
               url: `${WEB_URL}/diagram/${id}`,
               message: `Diagram updated. View at ${WEB_URL}/diagram/${id}`,
             },

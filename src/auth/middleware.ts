@@ -28,7 +28,7 @@ export interface UserContext {
 function extractBearerToken(header: string | undefined): string | null {
   if (!header) return null;
   const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 /**

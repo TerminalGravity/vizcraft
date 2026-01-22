@@ -34,7 +34,7 @@ type BunWebSocket = {
 /**
  * Bun server with WebSocket support
  */
-type BunServerWithWS = Server & {
+type BunServerWithWS = Server<WebSocketData> & {
   upgrade: (req: Request, options?: { data?: unknown }) => boolean;
 };
 
@@ -73,10 +73,10 @@ export async function handleWebSocketUpgrade(req: Request, server: BunServerWith
   // Upgrade to WebSocket with user context
   const upgraded = server.upgrade(req, {
     data: {
-      participantId: null,
-      userId,
-      role,
-    } as WebSocketData,
+      participantId: undefined,
+      userId: userId ?? undefined,
+      role: role ?? undefined,
+    } satisfies WebSocketData,
   });
 
   if (!upgraded) {

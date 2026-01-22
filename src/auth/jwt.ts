@@ -72,8 +72,11 @@ export async function signJWT(
   const now = Math.floor(Date.now() / 1000);
   const expiresIn = options.expiresInSeconds ?? 24 * 60 * 60; // 24 hours default
 
+  // Build full payload - explicitly set known fields to ensure types
+  // (the index signature makes spread types looser than desired)
   const fullPayload: JWTPayload = {
     ...payload,
+    sub: payload.sub as string, // Type is narrowed correctly but needs explicit cast
     iss: "vizcraft",
     iat: now,
     exp: now + expiresIn,
@@ -110,17 +113,24 @@ export async function verifyJWT(token: string): Promise<TokenValidationResult> {
       return { valid: false, error: "Invalid token format" };
     }
 
-    const [headerB64, payloadB64, signatureB64] = parts;
+    const headerB64 = parts[0];
+    const payloadB64 = parts[1];
+    const signatureB64 = parts[2];
+
+    // Guard against undefined (TypeScript strict mode)
+    if (!headerB64 || !payloadB64 || !signatureB64) {
+      return { valid: false, error: "Invalid token format" };
+    }
 
     // Verify signature
     const key = await getSigningKey();
     const encoder = new TextEncoder();
-    const signature = base64UrlDecode(signatureB64);
+    const signatureBytes = base64UrlDecode(signatureB64);
 
     const valid = await crypto.subtle.verify(
       "HMAC",
       key,
-      signature,
+      signatureBytes.buffer as ArrayBuffer,
       encoder.encode(`${headerB64}.${payloadB64}`)
     );
 
@@ -160,7 +170,10 @@ export function decodeJWT(token: string): JWTPayload | null {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
 
-    const payloadStr = new TextDecoder().decode(base64UrlDecode(parts[1]));
+    const payloadB64 = parts[1];
+    if (!payloadB64) return null;
+
+    const payloadStr = new TextDecoder().decode(base64UrlDecode(payloadB64));
     return JSON.parse(payloadStr) as JWTPayload;
   } catch {
     return null;

@@ -165,7 +165,9 @@ export function validateRequest<B extends ZodSchema, P extends ZodSchema>(config
         return c.json(validationErrorResponse(details, "param"), 400);
       }
 
-      c.set("validatedParams", result.data as z.infer<P>);
+      // Type assertion: conditional types don't narrow with optional generics
+      // External API signature is correct; internal implementation uses any
+      (c as { set: (k: string, v: unknown) => void }).set("validatedParams", result.data);
     }
 
     // Validate body
@@ -179,7 +181,8 @@ export function validateRequest<B extends ZodSchema, P extends ZodSchema>(config
           return c.json(validationErrorResponse(details, "body"), 400);
         }
 
-        c.set("validatedBody", result.data as z.infer<B>);
+        // Same pattern: external API is typed correctly
+        (c as { set: (k: string, v: unknown) => void }).set("validatedBody", result.data);
       } catch (err) {
         if (err instanceof SyntaxError) {
           return c.json(

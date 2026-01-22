@@ -170,8 +170,11 @@ export class LRUCache<T> {
 
     // Evict the lowest-scored entries
     for (let i = 0; i < toEvict && i < scored.length; i++) {
-      this.delete(scored[i].key);
-      this.evictions++;
+      const entry = scored[i];
+      if (entry) {
+        this.delete(entry.key);
+        this.evictions++;
+      }
     }
   }
 

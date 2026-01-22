@@ -12,7 +12,7 @@ import { COLLAB_CONFIG } from "./types";
 // WebSocket connection type with optional user info
 type WebSocketConnection = {
   send: (message: string) => void;
-  close: () => void;
+  close: (code?: number, reason?: string) => void;
   readyState: number;
   userId?: string | null;
   role?: "admin" | "user" | "viewer" | null;
@@ -574,7 +574,8 @@ class RoomManager {
   }
 
   private getNextColor(): string {
-    const color = COLLAB_CONFIG.PARTICIPANT_COLORS[this.colorIndex % COLLAB_CONFIG.PARTICIPANT_COLORS.length];
+    const colors = COLLAB_CONFIG.PARTICIPANT_COLORS;
+    const color = colors[this.colorIndex % colors.length] ?? colors[0] ?? "#808080";
     this.colorIndex++;
     return color;
   }

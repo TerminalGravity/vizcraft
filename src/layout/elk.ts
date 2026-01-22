@@ -220,14 +220,14 @@ function convertToRadialLayout(
   if (nodeIds.length === 0) return positions;
 
   // Find center and layers
-  const yValues = nodeIds.map(id => positions[id].y);
+  const yValues = nodeIds.map(id => positions[id]?.y ?? 0);
   const minY = Math.min(...yValues);
   const maxY = Math.max(...yValues);
   const yRange = maxY - minY || 1;
 
   // Calculate center
-  const centerX = nodeIds.reduce((sum, id) => sum + positions[id].x, 0) / nodeIds.length;
-  const centerY = nodeIds.reduce((sum, id) => sum + positions[id].y, 0) / nodeIds.length;
+  const centerX = nodeIds.reduce((sum, id) => sum + (positions[id]?.x ?? 0), 0) / nodeIds.length;
+  const centerY = nodeIds.reduce((sum, id) => sum + (positions[id]?.y ?? 0), 0) / nodeIds.length;
 
   // Convert to radial
   const radialPositions: Record<string, { x: number; y: number }> = {};
@@ -236,7 +236,8 @@ function convertToRadialLayout(
   // Group nodes by their Y layer
   const layers: Map<number, string[]> = new Map();
   for (const id of nodeIds) {
-    const layerIndex = Math.round(((positions[id].y - minY) / yRange) * 10);
+    const posY = positions[id]?.y ?? 0;
+    const layerIndex = Math.round(((posY - minY) / yRange) * 10);
     if (!layers.has(layerIndex)) {
       layers.set(layerIndex, []);
     }
@@ -248,12 +249,15 @@ function convertToRadialLayout(
 
   for (let layerIdx = 0; layerIdx < sortedLayers.length; layerIdx++) {
     const layer = sortedLayers[layerIdx];
+    if (layer === undefined) continue;
     const nodesInLayer = layers.get(layer)!;
     const radius = baseRadius + (layerIdx * 100);
 
     for (let i = 0; i < nodesInLayer.length; i++) {
+      const nodeId = nodesInLayer[i];
+      if (!nodeId) continue;
       const angle = (2 * Math.PI * i) / nodesInLayer.length - Math.PI / 2;
-      radialPositions[nodesInLayer[i]] = {
+      radialPositions[nodeId] = {
         x: centerX + radius * Math.cos(angle),
         y: centerY + radius * Math.sin(angle),
       };

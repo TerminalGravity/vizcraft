@@ -216,8 +216,11 @@ function labelsMatch(a: Record<string, string>, b: Record<string, string>): bool
   if (keysA.length !== keysB.length) return false;
 
   for (let i = 0; i < keysA.length; i++) {
-    if (keysA[i] !== keysB[i]) return false;
-    if (a[keysA[i]] !== b[keysB[i]]) return false;
+    const keyA = keysA[i];
+    const keyB = keysB[i];
+    if (!keyA || !keyB) return false;
+    if (keyA !== keyB) return false;
+    if (a[keyA] !== b[keyB]) return false;
   }
 
   return true;
