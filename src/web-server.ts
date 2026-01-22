@@ -43,6 +43,7 @@ import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
 import { requestContext } from "./api/request-context";
 import { diagramBodyLimit, thumbnailBodyLimit, smallBodyLimit } from "./api/body-limit";
+import { responseCompression } from "./api/response-compression";
 import {
   withTimeout,
   TimeoutError,
@@ -114,6 +115,15 @@ app.use("*", logger());
 app.use("*", securityHeaders({
   isProduction: process.env.NODE_ENV === "production",
 }));
+
+// Response compression (only if CompressionStream is available)
+// Note: CompressionStream is a Web API that may not be available in all runtimes
+if (typeof globalThis.CompressionStream !== "undefined") {
+  app.use("/api/*", responseCompression());
+  console.log("[compression] Response compression enabled for API routes");
+} else {
+  console.log("[compression] CompressionStream not available, skipping compression");
+}
 
 // API-specific security headers (more restrictive)
 app.use("/api/*", apiSecurityHeaders());
