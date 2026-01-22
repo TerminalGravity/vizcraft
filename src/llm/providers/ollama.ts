@@ -1,9 +1,13 @@
 /**
- * Ollama LLM Provider (Stub)
- * Placeholder for local model integration via Ollama
+ * Ollama LLM Provider
+ * Local model integration via Ollama for offline diagram transformation
  *
- * Ollama enables running models like Llama, Mistral, CodeLlama locally.
- * This stub can be expanded when local model support is needed.
+ * Features:
+ * - Structured outputs via JSON mode
+ * - Zod schema validation
+ * - Retry with exponential backoff
+ * - Timeout handling for slow local inference
+ * - Support for multiple models (llama3.2, codellama, mistral, etc.)
  */
 
 import type {
@@ -11,9 +15,86 @@ import type {
   LLMProviderConfig,
   DiagramTransformRequest,
   DiagramTransformResponse,
+  DiagramTransformOutput,
 } from "../types";
+import { DiagramTransformOutputSchema } from "../types";
+import type { DiagramSpec } from "../../types";
 
-const DEFAULT_BASE_URL = "http://localhost:11434";
+// Default configuration
+const DEFAULT_CONFIG = {
+  baseUrl: "http://localhost:11434",
+  model: "llama3.2",
+  timeoutMs: 120_000, // 2 minutes for local inference
+  maxTokens: 4096,
+  temperature: 0.3,
+};
+
+// System prompt optimized for local models (more explicit JSON instructions)
+const DIAGRAM_SYSTEM_PROMPT = `You are Vizcraft, an expert diagram transformation agent. You analyze and modify diagrams based on natural language instructions.
+
+You MUST respond with valid JSON matching the exact schema provided. Do not include any text outside the JSON object.
+
+DIAGRAM STRUCTURE:
+- nodes: Array of objects with {id, label, type?, color?, position?, details?, width?, height?}
+- edges: Array of objects with {id?, from, to, label?, style?, color?}
+- changes: Array of strings describing what you changed
+
+NODE TYPES (pick one): "box" (default), "diamond" (decisions), "circle" (events), "database", "cloud", "cylinder"
+EDGE STYLES (pick one): "solid" (default), "dashed", "dotted"
+COLORS: Use CSS hex values like "#1e293b", "#3b82f6"
+
+RULES:
+1. Preserve existing node/edge IDs when updating
+2. Generate unique, descriptive IDs for new elements (e.g., "auth-service", "db-main")
+3. Keep the diagram connected - don't create orphan nodes
+4. Position new nodes logically near related nodes
+5. Use concise, technical labels
+6. Always list your changes in the "changes" array`;
+
+// JSON schema to include in prompts (more compact for local models)
+const OUTPUT_SCHEMA = `{
+  "nodes": [{"id": "string", "label": "string", "type?": "box|diamond|circle|database|cloud|cylinder", "color?": "#hex", "position?": {"x": number, "y": number}, "details?": "string", "width?": number, "height?": number}],
+  "edges": [{"id?": "string", "from": "string", "to": "string", "label?": "string", "style?": "solid|dashed|dotted", "color?": "#hex"}],
+  "changes": ["string descriptions of changes"]
+}`;
+
+// Ollama API types
+interface OllamaGenerateRequest {
+  model: string;
+  prompt: string;
+  system?: string;
+  format?: "json";
+  stream?: boolean;
+  options?: {
+    temperature?: number;
+    num_predict?: number;
+    top_p?: number;
+    top_k?: number;
+  };
+}
+
+interface OllamaGenerateResponse {
+  model: string;
+  response: string;
+  done: boolean;
+  context?: number[];
+  total_duration?: number;
+  load_duration?: number;
+  prompt_eval_count?: number;
+  prompt_eval_duration?: number;
+  eval_count?: number;
+  eval_duration?: number;
+}
+
+interface OllamaTagsResponse {
+  models: Array<{
+    name: string;
+    model: string;
+    modified_at: string;
+    size: number;
+    digest: string;
+  }>;
+}
 
 export class OllamaProvider implements LLMProvider {
   readonly type = "ollama" as const;
@@ -21,49 +102,270 @@ export class OllamaProvider implements LLMProvider {
 
   private baseUrl: string;
   private model: string;
+  private timeoutMs: number;
+  private temperature: number;
+  private maxTokens: number;
 
   constructor(config?: Partial<LLMProviderConfig>) {
-    this.baseUrl = config?.baseUrl || process.env.OLLAMA_BASE_URL || DEFAULT_BASE_URL;
-    this.model = config?.model || process.env.OLLAMA_MODEL || "llama3.2";
+    this.baseUrl = config?.baseUrl || process.env.OLLAMA_BASE_URL || DEFAULT_CONFIG.baseUrl;
+    this.model = config?.model || process.env.OLLAMA_MODEL || DEFAULT_CONFIG.model;
+    this.timeoutMs = DEFAULT_CONFIG.timeoutMs;
+    this.temperature = config?.temperature ?? DEFAULT_CONFIG.temperature;
+    this.maxTokens = config?.maxTokens ?? DEFAULT_CONFIG.maxTokens;
   }
 
   get isConfigured(): boolean {
-    // Ollama doesn't need an API key - just check if server is running
+    // Ollama doesn't need an API key - just check configuration exists
     return true;
   }
 
+  /**
+   * Check if Ollama server is running and the model is available
+   */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) return false;
+
+      const data = (await response.json()) as OllamaTagsResponse;
+      // Check if our target model is available
+      const hasModel = data.models?.some(
+        (m) => m.name === this.model || m.name.startsWith(`${this.model}:`)
+      );
+
+      if (!hasModel) {
+        console.warn(
+          `[ollama] Model "${this.model}" not found. Available: ${data.models?.map((m) => m.name).join(", ") || "none"}`
+        );
+      }
+
       return response.ok;
     } catch {
       return false;
     }
   }
 
-  async transformDiagram(_request: DiagramTransformRequest): Promise<DiagramTransformResponse> {
+  /**
+   * List available models from Ollama
+   */
+  async listModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`);
+      if (!response.ok) return [];
+
+      const data = (await response.json()) as OllamaTagsResponse;
+      return data.models?.map((m) => m.name) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Transform a diagram using natural language via Ollama
+   */
+  async transformDiagram(request: DiagramTransformRequest): Promise<DiagramTransformResponse> {
     // Check if Ollama is running
     const isHealthy = await this.healthCheck();
     if (!isHealthy) {
       return {
         success: false,
-        error: `Ollama not available at ${this.baseUrl}. Start Ollama or use Anthropic provider.`,
+        error: `Ollama not available at ${this.baseUrl}. Start Ollama with: ollama serve`,
       };
     }
 
-    // TODO: Implement full Ollama integration
-    // This would involve:
-    // 1. Using structured output with JSON mode
-    // 2. Parsing the response to match DiagramTransformOutput
-    // 3. Handling different model capabilities
+    const { spec, prompt, context, maxRetries = 2 } = request;
+
+    // Build the prompt with JSON schema
+    const userPrompt = this.buildPrompt(spec, prompt, context);
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const startTime = performance.now();
+
+        // Call Ollama generate API with JSON mode
+        const ollamaRequest: OllamaGenerateRequest = {
+          model: this.model,
+          prompt: userPrompt,
+          system: DIAGRAM_SYSTEM_PROMPT,
+          format: "json",
+          stream: false,
+          options: {
+            temperature: this.temperature,
+            num_predict: this.maxTokens,
+          },
+        };
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+        const response = await fetch(`${this.baseUrl}/api/generate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(ollamaRequest),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+        const duration = performance.now() - startTime;
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Ollama API error: ${response.status} - ${errorText}`);
+        }
+
+        const result = (await response.json()) as OllamaGenerateResponse;
+
+        // Parse the JSON response
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(result.response);
+        } catch (parseError) {
+          console.error("[ollama] Failed to parse JSON response:", result.response.slice(0, 200));
+          if (attempt < maxRetries) {
+            await this.delay(Math.pow(2, attempt) * 500);
+            continue;
+          }
+          return {
+            success: false,
+            error: `Model returned invalid JSON: ${parseError instanceof Error ? parseError.message : "parse error"}`,
+          };
+        }
+
+        // Validate with Zod schema
+        const parseResult = DiagramTransformOutputSchema.safeParse(parsed);
+
+        if (!parseResult.success) {
+          console.error("[ollama] Invalid schema:", parseResult.error.message);
+          if (attempt < maxRetries) {
+            await this.delay(Math.pow(2, attempt) * 500);
+            continue;
+          }
+          return {
+            success: false,
+            error: `Invalid transformation output: ${parseResult.error.message}`,
+          };
+        }
+
+        const output: DiagramTransformOutput = parseResult.data;
+
+        // Build the updated spec
+        const updatedSpec: DiagramSpec = {
+          ...spec,
+          nodes: output.nodes.map((node) => ({
+            id: node.id,
+            label: node.label,
+            type: node.type,
+            color: node.color,
+            position: node.position,
+            details: node.details,
+            width: node.width,
+            height: node.height,
+          })),
+          edges: output.edges.map((edge) => ({
+            id: edge.id,
+            from: edge.from,
+            to: edge.to,
+            label: edge.label,
+            style: edge.style,
+            color: edge.color,
+          })),
+        };
+
+        // Calculate approximate token usage from Ollama response
+        const usage = {
+          inputTokens: result.prompt_eval_count || 0,
+          outputTokens: result.eval_count || 0,
+          model: this.model,
+        };
+
+        console.log(
+          `[ollama] Transform completed in ${Math.round(duration)}ms, ` +
+            `${usage.inputTokens} input tokens, ${usage.outputTokens} output tokens`
+        );
+
+        return {
+          success: true,
+          spec: updatedSpec,
+          changes: output.changes,
+          usage,
+        };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+
+        // Check for timeout/abort
+        if (lastError.name === "AbortError") {
+          lastError = new Error(`Request timed out after ${this.timeoutMs}ms`);
+        }
+
+        console.error(`[ollama] Attempt ${attempt + 1} failed:`, lastError.message);
+
+        if (attempt < maxRetries) {
+          await this.delay(Math.pow(2, attempt) * 500);
+        }
+      }
+    }
 
     return {
       success: false,
-      error: "Ollama provider not yet fully implemented. Use Anthropic provider for best results.",
+      error: lastError?.message || "Failed to transform diagram after retries",
     };
+  }
+
+  /**
+   * Build the prompt with diagram context and JSON schema
+   */
+  private buildPrompt(spec: DiagramSpec, prompt: string, context?: string): string {
+    const parts: string[] = [];
+
+    if (context) {
+      parts.push(`Context: ${context}\n`);
+    }
+
+    parts.push("Current diagram state:");
+    parts.push("```json");
+    parts.push(
+      JSON.stringify(
+        {
+          type: spec.type,
+          theme: spec.theme,
+          nodes: spec.nodes,
+          edges: spec.edges,
+        },
+        null,
+        2
+      )
+    );
+    parts.push("```\n");
+
+    parts.push(`User instruction: ${prompt}\n`);
+
+    parts.push("Respond with JSON matching this schema:");
+    parts.push(OUTPUT_SCHEMA);
+    parts.push("\nIMPORTANT: Return ONLY valid JSON. No explanations or markdown.");
+
+    return parts.join("\n");
+  }
+
+  /**
+   * Delay helper for exponential backoff
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
+/**
+ * Factory function to create an Ollama provider instance
+ */
 export function createOllamaProvider(config?: Partial<LLMProviderConfig>): OllamaProvider {
   return new OllamaProvider(config);
 }
