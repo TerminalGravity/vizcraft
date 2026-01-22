@@ -281,6 +281,22 @@ function parseShares(
 }
 
 /**
+ * Escape GLOB metacharacters in a string for safe use in SQLite GLOB patterns.
+ * GLOB metacharacters are: * ? [ ]
+ * We escape them by wrapping in character classes: [*] [?] [[] []]
+ *
+ * Note: While our nanoid validation prevents these characters in userIds,
+ * this provides defense-in-depth against pattern injection attacks.
+ */
+function escapeGlobPattern(str: string): string {
+  return str
+    .replace(/\[/g, "[[]")
+    .replace(/]/g, "[]]")
+    .replace(/\*/g, "[*]")
+    .replace(/\?/g, "[?]");
+}
+
+/**
  * Parse a basic database row into a Diagram object with default ownership fields
  * Used by listDiagrams() and listDiagramsPaginated() which don't query ownership columns
  */
@@ -1142,13 +1158,15 @@ export const storage = {
       // Use GLOB instead of LIKE to prevent wildcard injection
       // GLOB wildcards (* and ?) are not in our allowed userId character set
       // whereas LIKE wildcards (% and _) could be exploited via underscore
+      // We still escape GLOB metacharacters for defense-in-depth
+      const escapedUserId = escapeGlobPattern(userId);
       whereClause = `
         WHERE (owner_id = ? OR owner_id IS NULL OR is_public = 1 OR shares GLOB ?)
         ${project ? "AND project = ?" : ""}
       `;
       params = project
-        ? [userId, `*"userId":"${userId}"*`, project]
-        : [userId, `*"userId":"${userId}"*`];
+        ? [userId, `*"userId":"${escapedUserId}"*`, project]
+        : [userId, `*"userId":"${escapedUserId}"*`];
     } else {
       // Anonymous user: only public diagrams or legacy diagrams
       whereClause = `
