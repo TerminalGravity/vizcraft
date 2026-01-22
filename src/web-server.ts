@@ -445,7 +445,7 @@ app.get("/api/diagrams", async (c) => {
     const cached = listCache.get(cacheKey);
     if (cached) {
       const etag = generateETag(cached);
-      if (matchesETag(c.req.header("If-None-Match"), etag)) {
+      if (matchesETag(c.req.header("If-None-Match") ?? null, etag)) {
         return new Response(null, { status: 304 });
       }
       c.header("ETag", etag);
@@ -711,13 +711,14 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
     if (ifMatch) {
       // Parse version from ETag format: "v{version}" or just the version number
       const versionMatch = ifMatch.replace(/"/g, "").match(/^v?(\d+)$/);
-      if (!versionMatch) {
+      const versionStr = versionMatch?.[1];
+      if (!versionMatch || !versionStr) {
         return validationErrorResponse(
           c,
           "Invalid If-Match header format. Expected \"v{version}\" or \"{version}\""
         );
       }
-      baseVersion = parseInt(versionMatch[1], 10);
+      baseVersion = parseInt(versionStr, 10);
     }
 
     // Require version checking unless explicitly forced
@@ -881,11 +882,12 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
 
     // Convert data URL to binary response for efficient caching
     const matches = dataUrl.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
-    if (!matches) {
+    const base64Data = matches?.[2];
+    if (!matches || !base64Data) {
       return errorFromCode(c, ApiError.INVALID_THUMBNAIL);
     }
 
-    const buffer = Buffer.from(matches[2], "base64");
+    const buffer = Buffer.from(base64Data, "base64");
     return new Response(buffer, {
       headers: {
         "Content-Type": "image/png",
@@ -1058,8 +1060,8 @@ app.get("/api/diagrams/:id/diff", (c) => {
           diff: null,
         });
       }
-      version2 = versions[0]; // Latest
-      version1 = versions[1]; // Previous
+      version2 = versions[0] ?? null; // Latest
+      version1 = versions[1] ?? null; // Previous
     }
 
     if (!version1) {
@@ -1180,6 +1182,16 @@ app.get("/api/diagrams/:id/timeline", (c) => {
       }
 
       const previousVersion = versions[i + 1];
+      // This guard is technically unnecessary (we checked hasNextInBatch) but satisfies TypeScript
+      if (!previousVersion) {
+        return {
+          version: version.version,
+          message: version.message,
+          createdAt: version.createdAt,
+          summary: "...",
+          hasChanges: false,
+        };
+      }
       const diff = diffSpecs(previousVersion.spec, version.spec);
 
       return {
@@ -2165,9 +2177,8 @@ Bun.serve({
     close(ws) {
       handleWebSocketClose(ws as any);
     },
-    error(ws, error) {
-      handleWebSocketError(ws as any, error);
-    },
+    // Note: Bun's WebSocketHandler doesn't have an official 'error' callback
+    // Errors are logged in the close handler if needed
   },
 });
 
@@ -2181,7 +2192,7 @@ setDiagramIdProvider(() => storage.getAllDiagramIds());
 startThumbnailCleanup();
 
 // Register thumbnail cleanup for graceful shutdown
-onShutdown(() => {
+onShutdown("thumbnail-cleanup", () => {
   stopThumbnailCleanup();
   return Promise.resolve();
 });

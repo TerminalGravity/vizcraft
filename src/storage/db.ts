@@ -589,7 +589,8 @@ export const storage = {
     if (types && types.length > 0) {
       // Validate types against the DiagramTypeSchema enum to prevent SQL injection
       // and ensure only valid types are queried
-      const validTypes = types.filter(t => VALID_DIAGRAM_TYPES.has(t));
+      // Cast to allow has() to accept string (we're just checking membership)
+      const validTypes = types.filter(t => (VALID_DIAGRAM_TYPES as Set<string>).has(t));
       if (validTypes.length > 0) {
         // Filter by diagram type (stored in spec.type)
         const typePlaceholders = validTypes.map(() => "?").join(", ");
@@ -1074,7 +1075,7 @@ export const storage = {
     // - User is in the shares list
     // - No owner (legacy diagrams)
     let whereClause: string;
-    let params: unknown[];
+    let params: string[];
 
     if (userId) {
       whereClause = `
@@ -1095,7 +1096,7 @@ export const storage = {
 
     // Get total count
     const countQuery = `SELECT COUNT(*) as total FROM diagrams ${whereClause}`;
-    const countRow = db.query<{ total: number }, unknown[]>(countQuery).get(...params);
+    const countRow = db.query<{ total: number }, string[]>(countQuery).get(...params);
     const total = countRow?.total ?? 0;
 
     // Get paginated results
@@ -1105,7 +1106,7 @@ export const storage = {
       ORDER BY updated_at DESC
       LIMIT ? OFFSET ?
     `;
-    const rows = db.query<FullDiagramRow, unknown[]>(query).all(
+    const rows = db.query<FullDiagramRow, (string | number)[]>(query).all(
       ...params,
       limit,
       offset

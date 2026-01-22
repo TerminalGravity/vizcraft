@@ -297,12 +297,12 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * Error thrown when all retry attempts are exhausted
  */
 export class RetryExhaustedError extends Error {
-  public readonly cause: Error;
+  public override readonly cause: Error;
   public readonly attempts: number;
   public readonly totalDelayMs: number;
 
   constructor(message: string, cause: Error, attempts: number, totalDelayMs: number) {
-    super(message);
+    super(message, { cause });
     this.name = "RetryExhaustedError";
     this.cause = cause;
     this.attempts = attempts;

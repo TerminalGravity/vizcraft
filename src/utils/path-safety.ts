@@ -131,7 +131,13 @@ export function validateDataUrl(dataUrl: string): {
     throw new InvalidDataUrlError("Invalid data URL format");
   }
 
-  const [, mimeType, data] = match;
+  const mimeType = match[1];
+  const data = match[2];
+
+  // Guard against undefined (TypeScript strict mode)
+  if (!mimeType || !data) {
+    throw new InvalidDataUrlError("Invalid data URL format");
+  }
 
   // Check MIME type is allowed
   if (!ALLOWED_MIME_TYPES.has(mimeType)) {
@@ -141,7 +147,7 @@ export function validateDataUrl(dataUrl: string): {
   }
 
   // Validate base64 data is not empty and has reasonable size
-  if (!data || data.length === 0) {
+  if (data.length === 0) {
     throw new InvalidDataUrlError("Data URL contains no data");
   }
 
@@ -151,7 +157,7 @@ export function validateDataUrl(dataUrl: string): {
     throw new InvalidDataUrlError("Data URL exceeds maximum size limit (10MB)");
   }
 
-  const extension = MIME_TO_EXTENSION[mimeType];
+  const extension = MIME_TO_EXTENSION[mimeType] ?? "bin";
 
   return { mimeType, extension, data };
 }

@@ -95,9 +95,19 @@ export const protectedStorage = {
   /**
    * Create a new diagram
    */
-  createDiagram(name: string, project: string, spec: DiagramSpec): Diagram {
+  createDiagram(
+    name: string,
+    project: string,
+    spec: DiagramSpec,
+    options: { ownerId?: string | null; isPublic?: boolean } = {}
+  ): Diagram {
+    // Convert null to undefined to match rawStorage signature
+    const sanitizedOptions = {
+      ownerId: options.ownerId ?? undefined,
+      isPublic: options.isPublic,
+    };
     return withProtection("INSERT", "diagrams", () =>
-      rawStorage.createDiagram(name, project, spec)
+      rawStorage.createDiagram(name, project, spec, sanitizedOptions)
     );
   },
 
@@ -121,6 +131,20 @@ export const protectedStorage = {
   ): Diagram | { conflict: true; currentVersion: number } | null {
     return withProtection("UPDATE", "diagrams", () =>
       rawStorage.updateDiagram(id, spec, message, baseVersion)
+    );
+  },
+
+  /**
+   * Transform a diagram using a function with automatic conflict retry
+   */
+  transformDiagram(
+    id: string,
+    transform: (spec: DiagramSpec) => DiagramSpec,
+    message?: string,
+    maxRetries: number = 3
+  ): Diagram | null | { error: "MAX_RETRIES_EXCEEDED"; attempts: number } {
+    return withProtection("UPDATE", "diagrams", () =>
+      rawStorage.transformDiagram(id, transform, message, maxRetries)
     );
   },
 
@@ -197,6 +221,19 @@ export const protectedStorage = {
   getLatestVersion(diagramId: string): DiagramVersion | null {
     return withProtection("SELECT", "diagram_versions", () =>
       rawStorage.getLatestVersion(diagramId)
+    );
+  },
+
+  /**
+   * Get versions with pagination (SQL-level pagination)
+   */
+  getVersionsPaginated(
+    diagramId: string,
+    limit: number = 20,
+    offset: number = 0
+  ): { versions: DiagramVersion[]; total: number } {
+    return withProtection("SELECT", "diagram_versions", () =>
+      rawStorage.getVersionsPaginated(diagramId, limit, offset)
     );
   },
 

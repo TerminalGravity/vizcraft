@@ -22,6 +22,7 @@ const WEB_URL = process.env.WEB_URL || `http://localhost:3420`;
  */
 interface MCPToolResult {
   content: Array<{ type: "text"; text: string }>;
+  [key: string]: unknown; // Required by MCP SDK for extensibility
 }
 
 /**
@@ -54,7 +55,7 @@ function createErrorResponse(
   };
 
   return {
-    content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(response, null, 2) }],
   };
 }
 
@@ -189,7 +190,7 @@ server.tool(
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify(
             {
               success: true,
@@ -229,7 +230,7 @@ server.tool(
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify(
             {
               success: true,
@@ -262,7 +263,7 @@ server.tool(
     const existing = storage.getDiagram(id);
     if (!existing) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ success: false, error: "Diagram not found" }) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Diagram not found" }) }],
       };
     }
 
@@ -314,7 +315,7 @@ server.tool(
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ success: false, error: "Diagram not found" }) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Diagram not found" }) }],
       };
     }
 
@@ -350,7 +351,7 @@ server.tool(
     };
 
     return {
-      content: [{ type: "text", text: JSON.stringify(description, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(description, null, 2) }],
     };
   })
 );
@@ -378,7 +379,7 @@ server.tool(
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify(
             {
               count: list.length,
@@ -407,7 +408,7 @@ server.tool(
     return {
       content: [
         {
-          type: "text",
+          type: "text" as const,
           text: JSON.stringify({ success: deleted, message: deleted ? "Diagram deleted" : "Diagram not found" }),
         },
       ],
@@ -428,7 +429,7 @@ server.tool(
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ success: false, error: "Diagram not found" }) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Diagram not found" }) }],
       };
     }
 
@@ -448,7 +449,7 @@ server.tool(
       }
     } catch (err) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ success: false, error: "Invalid export path" }) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Invalid export path" }) }],
       };
     }
 
@@ -457,7 +458,7 @@ server.tool(
       return {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: JSON.stringify({
               success: true,
               path: exportPath,
@@ -481,7 +482,7 @@ server.tool(
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: JSON.stringify({
                 success: true,
                 path: exportPath,
@@ -496,7 +497,7 @@ server.tool(
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: JSON.stringify({
                 success: false,
                 error: "SVG export requires web server running. Start with: bun run web:dev",
@@ -513,7 +514,7 @@ server.tool(
       return {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: JSON.stringify({
               success: false,
               message: "PNG export requires browser rendering",
@@ -534,7 +535,7 @@ server.tool(
       return {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: JSON.stringify({
               success: false,
               message: "PDF export requires browser rendering (uses jsPDF)",
@@ -551,7 +552,7 @@ server.tool(
     }
 
     return {
-      content: [{ type: "text", text: JSON.stringify({ success: false, error: `Unknown format: ${format}` }) }],
+      content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: `Unknown format: ${format}` }) }],
     };
   })
 );

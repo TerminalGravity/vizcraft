@@ -160,14 +160,16 @@ export function sanitizeSvgOutput(svg: string, options: SvgSanitizeOptions = {})
   const widthMatch = sanitized.match(/width\s*=\s*["']?(\d+)/);
   const heightMatch = sanitized.match(/height\s*=\s*["']?(\d+)/);
 
-  if (widthMatch && parseInt(widthMatch[1]) > maxDimension) {
+  const widthValue = widthMatch?.[1];
+  if (widthValue && parseInt(widthValue) > maxDimension) {
     sanitized = sanitized.replace(
       /width\s*=\s*["']?\d+/,
       `width="${maxDimension}"`
     );
   }
 
-  if (heightMatch && parseInt(heightMatch[1]) > maxDimension) {
+  const heightValue = heightMatch?.[1];
+  if (heightValue && parseInt(heightValue) > maxDimension) {
     sanitized = sanitized.replace(
       /height\s*=\s*["']?\d+/,
       `height="${maxDimension}"`
