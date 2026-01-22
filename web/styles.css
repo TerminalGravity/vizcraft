@@ -138,6 +138,9 @@ body {
   font-size: 0.875rem;
   color: var(--text-secondary);
   transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .diagram-item:hover {
@@ -148,6 +151,44 @@ body {
 .diagram-item.active {
   background: var(--accent);
   color: white;
+}
+
+.diagram-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Diagram thumbnails */
+.diagram-thumbnail {
+  width: 40px;
+  height: 28px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.diagram-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.2s ease;
+}
+
+.diagram-thumbnail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.diagram-thumbnail-placeholder svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
 }
 
 /* Canvas area */

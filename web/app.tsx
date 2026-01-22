@@ -16,6 +16,7 @@ interface Diagram {
   name: string;
   project: string;
   spec: DiagramSpec;
+  thumbnailUrl?: string;
   updatedAt: string;
 }
 
@@ -65,6 +66,15 @@ const api = {
 
   async deleteDiagram(id: string): Promise<void> {
     await fetch(`${API_URL}/diagrams/${id}`, { method: "DELETE" });
+  },
+
+  async updateThumbnail(id: string, thumbnailDataUrl: string): Promise<{ success: boolean }> {
+    const res = await fetch(`${API_URL}/diagrams/${id}/thumbnail`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thumbnail: thumbnailDataUrl }),
+    });
+    return res.json();
   },
 
   async listAgents(): Promise<{ agents: Agent[] }> {
@@ -161,6 +171,77 @@ const Icons = {
   ),
 };
 
+// Thumbnail generation utility
+const generateThumbnail = async (
+  editor: any,
+  maxWidth = 120,
+  maxHeight = 80
+): Promise<string | null> => {
+  try {
+    const shapeIds = editor.getCurrentPageShapeIds();
+    if (shapeIds.size === 0) return null;
+
+    const svg = await editor.getSvg([...shapeIds], {
+      padding: 8,
+      background: true,
+      scale: 0.5,
+    });
+
+    if (!svg) return null;
+
+    const svgString = new XMLSerializer().serializeToString(svg);
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(svgBlob);
+
+      img.onload = () => {
+        // Calculate dimensions preserving aspect ratio
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = height * (maxWidth / width);
+          width = maxWidth;
+        }
+        if (height > maxHeight) {
+          width = width * (maxHeight / height);
+          height = maxHeight;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+
+        if (ctx) {
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+
+          const dataUrl = canvas.toDataURL("image/png", 0.8);
+          URL.revokeObjectURL(url);
+          resolve(dataUrl);
+        } else {
+          URL.revokeObjectURL(url);
+          resolve(null);
+        }
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+
+      img.src = url;
+    });
+  } catch (err) {
+    console.error("Thumbnail generation failed:", err);
+    return null;
+  }
+};
+
 // Agent type from API
 interface Agent {
   id: string;
@@ -179,6 +260,31 @@ const getAgentIcon = (agent: Agent): string => {
   if (agent.type === "preset") return "🎨";
   return "⚙️";
 };
+
+// Thumbnail component with lazy loading
+function DiagramThumbnail({ diagram }: { diagram: Diagram }) {
+  const [loaded, setLoaded] = useState(false);
+
+  if (!diagram.thumbnailUrl) {
+    return (
+      <div className="diagram-thumbnail diagram-thumbnail-placeholder">
+        <Icons.File />
+      </div>
+    );
+  }
+
+  return (
+    <div className="diagram-thumbnail">
+      {!loaded && <div className="diagram-thumbnail-placeholder"><Icons.File /></div>}
+      <img
+        src={diagram.thumbnailUrl}
+        alt={diagram.name}
+        onLoad={() => setLoaded(true)}
+        style={{ opacity: loaded ? 1 : 0 }}
+      />
+    </div>
+  );
+}
 
 // Sidebar component
 function Sidebar({
@@ -241,7 +347,8 @@ function Sidebar({
                       className={`diagram-item ${selectedDiagram === d.id ? "active" : ""}`}
                       onClick={() => onSelectDiagram(d.id)}
                     >
-                      <Icons.File /> {d.name}
+                      <DiagramThumbnail diagram={d} />
+                      <span className="diagram-item-name">{d.name}</span>
                     </li>
                   ))}
                 </ul>
@@ -358,10 +465,12 @@ function Panel({
 // Canvas component with tldraw
 function Canvas({
   diagram,
-  editorRef
+  editorRef,
+  onThumbnailReady,
 }: {
   diagram: Diagram | null;
   editorRef: React.MutableRefObject<any>;
+  onThumbnailReady?: (diagramId: string, thumbnail: string) => void;
 }) {
   if (!diagram) {
     return (
@@ -434,6 +543,16 @@ function Canvas({
           // Add shapes to editor
           editor.createShapes(shapes);
           editor.zoomToFit();
+
+          // Generate thumbnail after a short delay (let shapes render)
+          if (onThumbnailReady && !diagram.thumbnailUrl) {
+            setTimeout(async () => {
+              const thumbnail = await generateThumbnail(editor);
+              if (thumbnail) {
+                onThumbnailReady(diagram.id, thumbnail);
+              }
+            }, 500);
+          }
         }}
       />
     </div>
@@ -555,6 +674,16 @@ function App() {
           type: "success",
           message: `Agent completed: ${result.changes?.join(", ") || "Done"}`,
         });
+
+        // Regenerate thumbnail after agent runs
+        setTimeout(async () => {
+          if (editorRef.current && selectedId) {
+            const thumbnail = await generateThumbnail(editorRef.current);
+            if (thumbnail) {
+              handleThumbnailReady(selectedId, thumbnail);
+            }
+          }
+        }, 1000);
       } else {
         setNotification({
           type: "error",
@@ -595,6 +724,27 @@ function App() {
       setLoading(false);
     }
   };
+
+  const handleThumbnailReady = useCallback(async (diagramId: string, thumbnail: string) => {
+    try {
+      await api.updateThumbnail(diagramId, thumbnail);
+      // Update local state to show thumbnail immediately
+      setDiagrams((prev) =>
+        prev.map((d) => (d.id === diagramId ? { ...d, thumbnailUrl: thumbnail } : d))
+      );
+      // Also update projects state
+      setProjects((prev) =>
+        prev.map((p) => ({
+          ...p,
+          diagrams: p.diagrams.map((d) =>
+            d.id === diagramId ? { ...d, thumbnailUrl: thumbnail } : d
+          ),
+        }))
+      );
+    } catch (err) {
+      console.error("Failed to save thumbnail:", err);
+    }
+  }, []);
 
   const handleNewDiagram = async () => {
     const name = prompt("Diagram name:");
@@ -869,7 +1019,7 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
               </div>
             )}
           </div>
-          <Canvas diagram={selectedDiagram} editorRef={editorRef} />
+          <Canvas diagram={selectedDiagram} editorRef={editorRef} onThumbnailReady={handleThumbnailReady} />
         </div>
 
         <Panel

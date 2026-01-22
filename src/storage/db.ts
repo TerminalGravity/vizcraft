@@ -183,6 +183,15 @@ export const storage = {
     }));
   },
 
+  // Thumbnails
+  updateThumbnail(id: string, thumbnailDataUrl: string): boolean {
+    const result = db.run(
+      `UPDATE diagrams SET thumbnail_url = ?, updated_at = ? WHERE id = ?`,
+      [thumbnailDataUrl, new Date().toISOString(), id]
+    );
+    return result.changes > 0;
+  },
+
   // Projects
   listProjects(): string[] {
     const rows = db.query<{ project: string }, []>(

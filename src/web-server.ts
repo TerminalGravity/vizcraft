@@ -29,6 +29,7 @@ app.get("/api/diagrams", (c) => {
       name: d.name,
       project: d.project,
       spec: d.spec,
+      thumbnailUrl: d.thumbnailUrl,
       updatedAt: d.updatedAt,
     })),
     projects,
@@ -65,6 +66,23 @@ app.delete("/api/diagrams/:id", (c) => {
   const id = c.req.param("id");
   if (!storage.deleteDiagram(id)) return c.json({ error: "Diagram not found" }, 404);
   return c.json({ success: true });
+});
+
+// Update diagram thumbnail
+app.put("/api/diagrams/:id/thumbnail", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json<{ thumbnail: string }>();
+
+  if (!body.thumbnail) {
+    return c.json({ error: "thumbnail data URL required" }, 400);
+  }
+
+  if (!storage.getDiagram(id)) {
+    return c.json({ error: "Diagram not found" }, 404);
+  }
+
+  const success = storage.updateThumbnail(id, body.thumbnail);
+  return c.json({ success });
 });
 
 // Get versions
