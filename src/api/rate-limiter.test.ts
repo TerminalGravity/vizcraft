@@ -134,12 +134,19 @@ describe("Rate Limiter", () => {
       expect(RATE_LIMITS.AGENT_RUN.maxRequests).toBe(5);
     });
 
-    it("exposes all rate limiters", () => {
+    it("has admin limiter with strict config (prevents DoS)", () => {
+      expect(RATE_LIMITS.ADMIN.maxRequests).toBe(5);
+      expect(RATE_LIMITS.ADMIN.windowMs).toBe(60000);
+      expect(RATE_LIMITS.ADMIN.name).toBe("admin");
+    });
+
+    it("exposes all rate limiters including admin", () => {
       expect(rateLimiters.general).toBeDefined();
       expect(rateLimiters.diagramCreate).toBeDefined();
       expect(rateLimiters.agentRun).toBeDefined();
       expect(rateLimiters.layout).toBeDefined();
       expect(rateLimiters.export).toBeDefined();
+      expect(rateLimiters.admin).toBeDefined();
     });
   });
 

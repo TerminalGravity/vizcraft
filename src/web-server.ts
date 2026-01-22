@@ -971,8 +971,8 @@ app.get("/api/agents/:id", async (c) => {
   }
 });
 
-// Performance stats endpoint
-app.get("/api/performance/stats", (c) => {
+// Performance stats endpoint (rate limited to prevent abuse)
+app.get("/api/performance/stats", rateLimiters.admin, (c) => {
   try {
     const diagramStats = diagramCache.getStats();
     const listStats = listCache.getStats();
@@ -1006,8 +1006,8 @@ app.get("/api/performance/stats", (c) => {
   }
 });
 
-// Clear caches (admin endpoint)
-app.post("/api/performance/clear-cache", (c) => {
+// Clear caches (admin endpoint - strict rate limit to prevent DoS)
+app.post("/api/performance/clear-cache", rateLimiters.admin, (c) => {
   try {
     diagramCache.clear();
     listCache.clear();

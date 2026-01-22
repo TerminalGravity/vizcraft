@@ -49,6 +49,12 @@ export const RATE_LIMITS = {
     windowMs: 60_000, // 30 per minute
     name: "export",
   },
+  // Admin/performance operations - very strict (prevents DoS via cache clearing)
+  ADMIN: {
+    maxRequests: 5,
+    windowMs: 60_000, // Only 5 per minute
+    name: "admin",
+  },
 } as const;
 
 // Rate limit state for a single IP/key
@@ -61,17 +67,78 @@ interface RateLimitState {
 // In production, use Redis for distributed rate limiting
 const rateLimitStore = new Map<string, RateLimitState>();
 
-// Cleanup old entries periodically (every 5 minutes)
-const CLEANUP_INTERVAL = 5 * 60 * 1000;
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, state] of rateLimitStore.entries()) {
-    // Remove if no requests in the last 2 windows
-    if (now - state.windowStart > CLEANUP_INTERVAL) {
-      rateLimitStore.delete(key);
+// Cleanup configuration
+const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const MAX_STORE_SIZE = 100_000; // Maximum entries to prevent memory exhaustion
+let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
+let lastCleanupTime = Date.now();
+
+/**
+ * Perform cleanup of stale rate limit entries
+ * Wrapped in try-catch to prevent interval failures
+ */
+function performCleanup(): void {
+  try {
+    const now = Date.now();
+    let deleted = 0;
+
+    for (const [key, state] of rateLimitStore.entries()) {
+      // Remove if no requests in the last 2 windows
+      if (now - state.windowStart > CLEANUP_INTERVAL) {
+        rateLimitStore.delete(key);
+        deleted++;
+      }
     }
+
+    // Emergency cleanup if store is too large
+    if (rateLimitStore.size > MAX_STORE_SIZE) {
+      console.warn(
+        `[rate-limiter] Store size ${rateLimitStore.size} exceeds max ${MAX_STORE_SIZE}, performing emergency cleanup`
+      );
+      // Delete oldest 20% of entries
+      const entries = Array.from(rateLimitStore.entries())
+        .sort((a, b) => a[1].windowStart - b[1].windowStart);
+      const toDelete = Math.floor(entries.length * 0.2);
+      for (let i = 0; i < toDelete; i++) {
+        rateLimitStore.delete(entries[i][0]);
+        deleted++;
+      }
+    }
+
+    lastCleanupTime = now;
+
+    if (deleted > 0) {
+      console.log(`[rate-limiter] Cleaned up ${deleted} stale entries, ${rateLimitStore.size} remaining`);
+    }
+  } catch (err) {
+    // Log error but don't crash - cleanup is best-effort
+    console.error("[rate-limiter] Cleanup failed:", err instanceof Error ? err.message : err);
   }
-}, CLEANUP_INTERVAL);
+}
+
+/**
+ * Start the cleanup interval (idempotent)
+ */
+function ensureCleanupRunning(): void {
+  if (cleanupIntervalId === null) {
+    cleanupIntervalId = setInterval(performCleanup, CLEANUP_INTERVAL);
+    // Unref to allow process to exit even if interval is running
+    if (typeof cleanupIntervalId === "object" && "unref" in cleanupIntervalId) {
+      cleanupIntervalId.unref();
+    }
+    console.log("[rate-limiter] Cleanup interval started");
+  }
+
+  // Check if cleanup has been running - restart if stale
+  const timeSinceLastCleanup = Date.now() - lastCleanupTime;
+  if (timeSinceLastCleanup > CLEANUP_INTERVAL * 3) {
+    console.warn("[rate-limiter] Cleanup appears stale, forcing cleanup now");
+    performCleanup();
+  }
+}
+
+// Start cleanup on module load
+ensureCleanupRunning();
 
 /**
  * Get client identifier from request
@@ -169,6 +236,7 @@ export const rateLimiters = {
   agentRun: createRateLimiter(RATE_LIMITS.AGENT_RUN),
   layout: createRateLimiter(RATE_LIMITS.LAYOUT),
   export: createRateLimiter(RATE_LIMITS.EXPORT),
+  admin: createRateLimiter(RATE_LIMITS.ADMIN),
 };
 
 /**
@@ -208,4 +276,32 @@ export function getRateLimitStatus(
  */
 export function clearRateLimitState(): void {
   rateLimitStore.clear();
+}
+
+/**
+ * Stop the cleanup interval (for graceful shutdown)
+ */
+export function stopRateLimitCleanup(): void {
+  if (cleanupIntervalId !== null) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+    console.log("[rate-limiter] Cleanup interval stopped");
+  }
+}
+
+/**
+ * Get rate limiter stats for monitoring
+ */
+export function getRateLimiterStats(): {
+  storeSize: number;
+  maxSize: number;
+  lastCleanupTime: number;
+  cleanupRunning: boolean;
+} {
+  return {
+    storeSize: rateLimitStore.size,
+    maxSize: MAX_STORE_SIZE,
+    lastCleanupTime,
+    cleanupRunning: cleanupIntervalId !== null,
+  };
 }
