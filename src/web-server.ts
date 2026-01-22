@@ -41,6 +41,7 @@ import { join, extname } from "path";
 import { rateLimiters } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
+import { renderMetrics, trackHttpRequest, setDiagramCount } from "./metrics";
 import { requestContext } from "./api/request-context";
 import { diagramBodyLimit, thumbnailBodyLimit, smallBodyLimit } from "./api/body-limit";
 import { responseCompression } from "./api/response-compression";
@@ -185,6 +186,16 @@ app.get("/api/health/live", (c) => c.json(livenessCheck()));
 app.get("/api/health/ready", async (c) => {
   const result = await readinessCheck();
   return c.json(result, result.ready ? 200 : 503);
+});
+
+// Prometheus metrics endpoint
+app.get("/metrics", (c) => {
+  // Update diagram count gauge before rendering
+  const stats = storage.getStats();
+  setDiagramCount(stats.diagramCount);
+
+  c.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  return c.text(renderMetrics());
 });
 
 // List diagrams with SQL-level pagination, sorting, search, and filtering
