@@ -161,6 +161,17 @@ const Icons = {
       <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
     </svg>
   ),
+  Search: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+      <circle cx="11" cy="11" r="8" />
+      <path d="M21 21l-4.35-4.35" />
+    </svg>
+  ),
+  Command: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+      <path d="M18 3a3 3 0 00-3 3v12a3 3 0 003 3 3 3 0 003-3 3 3 0 00-3-3H6a3 3 0 00-3 3 3 3 0 003 3 3 3 0 003-3V6a3 3 0 00-3-3 3 3 0 00-3 3 3 3 0 003 3h12a3 3 0 003-3 3 3 0 00-3-3z" />
+    </svg>
+  ),
   Sun: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
       <circle cx="12" cy="12" r="5" />
@@ -186,6 +197,16 @@ const Icons = {
       <circle cx="12" cy="12" r="10" />
       <line x1="12" y1="16" x2="12" y2="12" />
       <line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+  ),
+  ChevronLeft: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  ),
+  ChevronRight: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="16" height="16">
+      <polyline points="9 18 15 12 9 6" />
     </svg>
   ),
 };
@@ -323,6 +344,10 @@ function Sidebar({
   onRunAgent,
   runningAgent,
   isOpen,
+  collapsed,
+  onToggleCollapse,
+  searchQuery,
+  onSearchChange,
 }: {
   projects: Project[];
   selectedDiagram: string | null;
@@ -332,6 +357,10 @@ function Sidebar({
   onRunAgent: (agentId: string) => void;
   runningAgent: string | null;
   isOpen?: boolean;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
 }) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set(["default"]));
 
@@ -346,28 +375,61 @@ function Sidebar({
   };
 
   return (
-    <aside className={`sidebar ${isOpen ? "open" : ""}`}>
+    <aside className={`sidebar ${isOpen ? "open" : ""} ${collapsed ? "collapsed" : ""}`}>
+      {/* Collapse toggle button */}
+      {onToggleCollapse && (
+        <button className="sidebar-collapse-btn" onClick={onToggleCollapse} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          {collapsed ? <Icons.ChevronRight /> : <Icons.ChevronLeft />}
+        </button>
+      )}
+
+      {/* Search - hidden when collapsed */}
+      {!collapsed && (
+        <div className="sidebar-search">
+          <div className="sidebar-search-wrapper">
+            <Icons.Search />
+            <input
+              type="text"
+              className="sidebar-search-input"
+              placeholder="Search diagrams..."
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="sidebar-section">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-          <span className="sidebar-title" style={{ marginBottom: 0 }}>Projects</span>
-          <button className="btn btn-ghost btn-sm" onClick={onNewDiagram} title="New Diagram">
+        {!collapsed && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+            <span className="sidebar-title" style={{ marginBottom: 0 }}>Projects</span>
+            <button className="btn btn-ghost btn-sm" onClick={onNewDiagram} title="New Diagram">
+              <Icons.Plus />
+            </button>
+          </div>
+        )}
+        {collapsed && (
+          <button className="btn btn-ghost btn-sm collapsed-action" onClick={onNewDiagram} title="New Diagram">
             <Icons.Plus />
           </button>
-        </div>
+        )}
         <ul className="project-list">
           {projects.map((project) => (
             <li key={project.name}>
               <div
                 className={`project-item ${expandedProjects.has(project.name) ? "active" : ""}`}
                 onClick={() => toggleProject(project.name)}
+                title={collapsed ? project.name : undefined}
               >
                 <Icons.Folder />
-                <span>{project.name}</span>
-                <span style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                  {project.diagrams.length}
-                </span>
+                {!collapsed && <span>{project.name}</span>}
+                {!collapsed && (
+                  <span style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    {project.diagrams.length}
+                  </span>
+                )}
               </div>
-              {expandedProjects.has(project.name) && (
+              {expandedProjects.has(project.name) && !collapsed && (
                 <ul className="diagram-list">
                   {project.diagrams.map((d) => (
                     <li
@@ -387,28 +449,32 @@ function Sidebar({
       </div>
 
       <div className="sidebar-section" style={{ flex: 1 }}>
-        <span className="sidebar-title">Agents</span>
+        {!collapsed && <span className="sidebar-title">Agents</span>}
         <div className="agent-list">
           {agents.length === 0 ? (
-            <div style={{ color: "var(--text-muted)", fontSize: "0.875rem", padding: "0.5rem" }}>
-              No agents loaded
-            </div>
+            !collapsed && (
+              <div style={{ color: "var(--text-muted)", fontSize: "0.875rem", padding: "0.5rem" }}>
+                No agents loaded
+              </div>
+            )
           ) : (
             agents.map((agent) => (
               <button
                 key={agent.id}
-                className={`agent-btn ${runningAgent === agent.id ? "running" : ""}`}
+                className={`agent-btn ${runningAgent === agent.id ? "running" : ""} ${collapsed ? "collapsed" : ""}`}
                 onClick={() => onRunAgent(agent.id)}
                 disabled={!selectedDiagram || runningAgent !== null}
-                title={!selectedDiagram ? "Select a diagram first" : `Run ${agent.name}`}
+                title={collapsed ? agent.name : (!selectedDiagram ? "Select a diagram first" : `Run ${agent.name}`)}
               >
                 <span className="agent-icon">
                   {runningAgent === agent.id ? "⏳" : getAgentIcon(agent)}
                 </span>
-                <span className="agent-info">
-                  <span className="agent-name">{agent.name}</span>
-                  <span className="agent-desc">{agent.description || agent.type}</span>
-                </span>
+                {!collapsed && (
+                  <span className="agent-info">
+                    <span className="agent-name">{agent.name}</span>
+                    <span className="agent-desc">{agent.description || agent.type}</span>
+                  </span>
+                )}
               </button>
             ))
           )}
@@ -418,19 +484,23 @@ function Sidebar({
   );
 }
 
-// Panel component
+// Panel component with tabs
 function Panel({
   diagram,
   onSendToClaude,
   onCopySpec,
   onExport,
   isOpen,
+  activeTab,
+  onTabChange,
 }: {
   diagram: Diagram | null;
   onSendToClaude: () => void;
   onCopySpec: () => void;
   onExport: (format: string) => void;
   isOpen?: boolean;
+  activeTab: "info" | "export" | "structure";
+  onTabChange: (tab: "info" | "export" | "structure") => void;
 }) {
   if (!diagram) {
     return (
@@ -444,47 +514,129 @@ function Panel({
 
   return (
     <aside className={`panel ${isOpen ? "open" : ""}`}>
-      <div className="panel-section">
-        <h3 className="panel-title">Diagram Info</h3>
-        <div style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
-          <p><strong>Name:</strong> {diagram.name}</p>
-          <p><strong>Project:</strong> {diagram.project}</p>
-          <p><strong>Type:</strong> {diagram.spec.type}</p>
-          <p><strong>Nodes:</strong> {diagram.spec.nodes.length}</p>
-          <p><strong>Edges:</strong> {diagram.spec.edges.length}</p>
-        </div>
+      {/* Tab bar */}
+      <div className="panel-tabs">
+        <button
+          className={`panel-tab ${activeTab === "info" ? "active" : ""}`}
+          onClick={() => onTabChange("info")}
+        >
+          <Icons.Info /> Info
+        </button>
+        <button
+          className={`panel-tab ${activeTab === "export" ? "active" : ""}`}
+          onClick={() => onTabChange("export")}
+        >
+          <Icons.Download /> Export
+        </button>
+        <button
+          className={`panel-tab ${activeTab === "structure" ? "active" : ""}`}
+          onClick={() => onTabChange("structure")}
+        >
+          <Icons.File /> Structure
+        </button>
       </div>
 
-      <div className="panel-section">
-        <h3 className="panel-title">Actions</h3>
-        <div className="action-btns">
-          <button className="btn btn-primary" onClick={onSendToClaude}>
-            <Icons.Send /> Send to Claude
-          </button>
-          <button className="btn btn-secondary" onClick={onCopySpec}>
-            <Icons.Copy /> Copy Spec
-          </button>
-          <button className="btn btn-secondary" onClick={() => onExport("png")}>
-            <Icons.Download /> Export PNG
-          </button>
-          <button className="btn btn-secondary" onClick={() => onExport("svg")}>
-            <Icons.Download /> Export SVG
-          </button>
-          <button className="btn btn-secondary" onClick={() => onExport("pdf")}>
-            <Icons.Download /> Export PDF
-          </button>
-        </div>
-      </div>
+      {/* Tab content */}
+      <div className="panel-content">
+        {activeTab === "info" && (
+          <>
+            <div className="panel-section">
+              <h3 className="panel-title">Diagram Info</h3>
+              <div className="panel-info-grid">
+                <div className="panel-info-item">
+                  <span className="panel-info-label">Name</span>
+                  <span className="panel-info-value">{diagram.name}</span>
+                </div>
+                <div className="panel-info-item">
+                  <span className="panel-info-label">Project</span>
+                  <span className="panel-info-value">{diagram.project}</span>
+                </div>
+                <div className="panel-info-item">
+                  <span className="panel-info-label">Type</span>
+                  <span className="panel-info-value">{diagram.spec.type}</span>
+                </div>
+                <div className="panel-info-item">
+                  <span className="panel-info-label">Nodes</span>
+                  <span className="panel-info-value">{diagram.spec.nodes.length}</span>
+                </div>
+                <div className="panel-info-item">
+                  <span className="panel-info-label">Edges</span>
+                  <span className="panel-info-value">{diagram.spec.edges.length}</span>
+                </div>
+              </div>
+            </div>
 
-      <div className="panel-section">
-        <h3 className="panel-title">Nodes</h3>
-        <ul style={{ fontSize: "0.8125rem", color: "var(--text-secondary)", listStyle: "none" }}>
-          {diagram.spec.nodes.map((n) => (
-            <li key={n.id} style={{ padding: "0.25rem 0" }}>
-              • {n.label} <span style={{ color: "var(--text-muted)" }}>({n.type || "box"})</span>
-            </li>
-          ))}
-        </ul>
+            <div className="panel-section">
+              <h3 className="panel-title">Quick Actions</h3>
+              <div className="action-btns">
+                <button className="btn btn-primary" onClick={onSendToClaude}>
+                  <Icons.Send /> Send to Claude
+                </button>
+                <button className="btn btn-secondary" onClick={onCopySpec}>
+                  <Icons.Copy /> Copy Spec
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {activeTab === "export" && (
+          <div className="panel-section">
+            <h3 className="panel-title">Export Options</h3>
+            <div className="export-options">
+              <button className="export-option" onClick={() => onExport("png")}>
+                <div className="export-option-icon">📷</div>
+                <div className="export-option-info">
+                  <span className="export-option-name">PNG</span>
+                  <span className="export-option-desc">Raster image, best for sharing</span>
+                </div>
+              </button>
+              <button className="export-option" onClick={() => onExport("svg")}>
+                <div className="export-option-icon">📐</div>
+                <div className="export-option-info">
+                  <span className="export-option-name">SVG</span>
+                  <span className="export-option-desc">Vector, perfect for scaling</span>
+                </div>
+              </button>
+              <button className="export-option" onClick={() => onExport("pdf")}>
+                <div className="export-option-icon">📄</div>
+                <div className="export-option-info">
+                  <span className="export-option-name">PDF</span>
+                  <span className="export-option-desc">Print-ready document</span>
+                </div>
+              </button>
+            </div>
+            <div className="panel-hint">
+              <kbd>⌘E</kbd> Quick export to PNG
+            </div>
+          </div>
+        )}
+
+        {activeTab === "structure" && (
+          <div className="panel-section">
+            <h3 className="panel-title">Nodes ({diagram.spec.nodes.length})</h3>
+            <ul className="structure-list">
+              {diagram.spec.nodes.map((n) => (
+                <li key={n.id} className="structure-item">
+                  <span className="structure-item-type">{n.type || "box"}</span>
+                  <span className="structure-item-label">{n.label}</span>
+                </li>
+              ))}
+            </ul>
+
+            <h3 className="panel-title" style={{ marginTop: "1rem" }}>Edges ({diagram.spec.edges.length})</h3>
+            <ul className="structure-list">
+              {diagram.spec.edges.map((e, i) => (
+                <li key={i} className="structure-item">
+                  <span className="structure-edge">
+                    {e.from} → {e.to}
+                    {e.label && <span className="structure-edge-label">"{e.label}"</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -634,9 +786,25 @@ function App() {
   const [exporting, setExporting] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [runningAgent, setRunningAgent] = useState<string | null>(null);
-  const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [toasts, setToasts] = useState<Array<{
+    id: string;
+    type: "success" | "error" | "info";
+    message: string;
+    action?: { label: string; onClick: () => void };
+  }>>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("vizcraft-sidebar-collapsed") === "true";
+    }
+    return false;
+  });
   const [panelOpen, setPanelOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  const [commandSelectedIndex, setCommandSelectedIndex] = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [panelTab, setPanelTab] = useState<"info" | "export" | "structure">("info");
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     // Check localStorage and system preference
     if (typeof window !== "undefined") {
@@ -677,31 +845,90 @@ function App() {
     setTheme((t) => (t === "dark" ? "light" : "dark"));
   };
 
+  const toggleSidebarCollapse = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("vizcraft-sidebar-collapsed", String(next));
+      return next;
+    });
+  };
+
+  // Toast management
+  const showToast = useCallback((
+    type: "success" | "error" | "info",
+    message: string,
+    action?: { label: string; onClick: () => void }
+  ) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    setToasts((prev) => [...prev, { id, type, message, action }]);
+
+    // Auto-dismiss after 5s (8s for errors)
+    const timeout = type === "error" ? 8000 : 5000;
+    setTimeout(() => {
+      dismissToast(id);
+    }, timeout);
+
+    return id;
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
   // Load diagrams and agents on mount
   useEffect(() => {
     loadDiagrams();
     loadAgents();
   }, []);
 
-  // Auto-hide notifications
-  useEffect(() => {
-    if (notification) {
-      const timer = setTimeout(() => setNotification(null), 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [notification]);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey;
 
+      // Escape: Close command palette
+      if (e.key === "Escape") {
+        setCommandPaletteOpen(false);
+        setCommandQuery("");
+        setCommandSelectedIndex(0);
+        return;
+      }
+
+      // Cmd/Ctrl + K: Open command palette
+      if (isMod && e.key === "k") {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        setCommandQuery("");
+        setCommandSelectedIndex(0);
+        return;
+      }
+
+      // Command palette navigation
+      if (commandPaletteOpen) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setCommandSelectedIndex((i) => Math.min(i + 1, filteredCommands.length - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setCommandSelectedIndex((i) => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === "Enter" && filteredCommands.length > 0) {
+          e.preventDefault();
+          executeCommand(filteredCommands[commandSelectedIndex]);
+          return;
+        }
+        return;
+      }
+
       // Cmd/Ctrl + S: Save (copy spec)
       if (isMod && e.key === "s") {
         e.preventDefault();
         if (selectedDiagram) {
           handleCopySpec();
-          setNotification({ type: "success", message: "Spec copied to clipboard" });
         }
       }
 
@@ -722,17 +949,25 @@ function App() {
       // Cmd/Ctrl + /: Show shortcuts help
       if (isMod && e.key === "/") {
         e.preventDefault();
-        alert(`Keyboard Shortcuts:
-⌘/Ctrl + N: New diagram
-⌘/Ctrl + S: Copy spec to clipboard
-⌘/Ctrl + E: Export as PNG
-⌘/Ctrl + /: Show this help`);
+        setCommandPaletteOpen(true);
+        setCommandQuery("?");
+      }
+
+      // Cmd/Ctrl + B: Toggle sidebar collapse
+      if (isMod && e.key === "b") {
+        e.preventDefault();
+        toggleSidebarCollapse();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedDiagram]);
+  }, [selectedDiagram, commandPaletteOpen, commandSelectedIndex, filteredCommands]);
+
+  // Reset selected index when command query changes
+  useEffect(() => {
+    setCommandSelectedIndex(0);
+  }, [commandQuery]);
 
   const loadAgents = async () => {
     try {
@@ -753,10 +988,11 @@ function App() {
       if (result.success) {
         // Reload the diagram to get updated spec
         await loadDiagrams();
-        setNotification({
-          type: "success",
-          message: `Agent completed: ${result.changes?.join(", ") || "Done"}`,
-        });
+        showToast(
+          "success",
+          `Agent completed: ${result.changes?.join(", ") || "Done"}`,
+          { label: "View Changes", onClick: () => setPanelTab("structure") }
+        );
 
         // Regenerate thumbnail after agent runs
         setTimeout(async () => {
@@ -768,16 +1004,10 @@ function App() {
           }
         }, 1000);
       } else {
-        setNotification({
-          type: "error",
-          message: result.error || "Agent failed",
-        });
+        showToast("error", result.error || "Agent failed");
       }
     } catch (err) {
-      setNotification({
-        type: "error",
-        message: `Agent error: ${err}`,
-      });
+      showToast("error", `Agent error: ${err}`);
     } finally {
       setRunningAgent(null);
     }
@@ -879,7 +1109,13 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
   const handleCopySpec = () => {
     if (!selectedDiagram) return;
     navigator.clipboard.writeText(JSON.stringify(selectedDiagram.spec, null, 2));
-    alert("Diagram spec copied to clipboard!");
+    showToast("success", "Spec copied to clipboard");
+  };
+
+  const handleCopyJSON = () => {
+    if (!selectedDiagram) return;
+    navigator.clipboard.writeText(JSON.stringify(selectedDiagram, null, 2));
+    showToast("success", "Full JSON copied to clipboard");
   };
 
   const handleExport = async (format: string) => {
@@ -975,6 +1211,71 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
     URL.revokeObjectURL(url);
   };
 
+  // Command palette commands
+  const commands = [
+    { id: "new-diagram", label: "New Diagram", shortcut: "⌘N", action: handleNewDiagram, category: "Diagrams" },
+    { id: "export-png", label: "Export as PNG", shortcut: "⌘E", action: () => selectedDiagram && handleExport("png"), category: "Export" },
+    { id: "export-svg", label: "Export as SVG", action: () => selectedDiagram && handleExport("svg"), category: "Export" },
+    { id: "export-pdf", label: "Export as PDF", action: () => selectedDiagram && handleExport("pdf"), category: "Export" },
+    { id: "copy-spec", label: "Copy Diagram Spec", shortcut: "⌘S", action: handleCopySpec, category: "Clipboard" },
+    { id: "copy-json", label: "Copy as JSON", action: handleCopyJSON, category: "Clipboard" },
+    { id: "toggle-theme", label: theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode", action: toggleTheme, category: "Settings" },
+    { id: "toggle-sidebar", label: sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar", shortcut: "⌘B", action: toggleSidebarCollapse, category: "View" },
+    { id: "toggle-panel", label: "Toggle Agent Panel", action: () => setPanelOpen(!panelOpen), category: "View" },
+    ...agents.map((agent) => ({
+      id: `run-agent-${agent.id}`,
+      label: `Run: ${agent.name}`,
+      action: () => selectedDiagram && handleRunAgent(agent.id),
+      category: "Agents",
+    })),
+    ...diagrams.map((d) => ({
+      id: `open-diagram-${d.id}`,
+      label: `Open: ${d.name}`,
+      action: () => setSelectedId(d.id),
+      category: "Diagrams",
+    })),
+  ];
+
+  // Filter commands based on query
+  const filteredCommands = commandQuery
+    ? commands.filter(
+        (cmd) =>
+          cmd.label.toLowerCase().includes(commandQuery.toLowerCase()) ||
+          cmd.category.toLowerCase().includes(commandQuery.toLowerCase())
+      )
+    : commands;
+
+  // Group commands by category
+  const groupedCommands = filteredCommands.reduce((acc, cmd) => {
+    if (!acc[cmd.category]) acc[cmd.category] = [];
+    acc[cmd.category].push(cmd);
+    return acc;
+  }, {} as Record<string, typeof commands>);
+
+  // Filter projects by search query
+  const filteredProjects = React.useMemo(() => {
+    if (!searchQuery) return projects;
+
+    const query = searchQuery.toLowerCase();
+    return projects
+      .map((project) => ({
+        ...project,
+        diagrams: project.diagrams.filter(
+          (d) =>
+            d.name.toLowerCase().includes(query) ||
+            d.project.toLowerCase().includes(query)
+        ),
+      }))
+      .filter((project) => project.diagrams.length > 0);
+  }, [projects, searchQuery]);
+
+  // Execute command and close palette
+  const executeCommand = (cmd: typeof commands[0]) => {
+    cmd.action();
+    setCommandPaletteOpen(false);
+    setCommandQuery("");
+  };
+
   if (loading) {
     return (
       <div className="app">
@@ -987,10 +1288,81 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
 
   return (
     <div className="app">
-      {/* Notification toast */}
-      {notification && (
-        <div className={`toast toast-${notification.type}`}>
-          {notification.type === "success" ? "✓" : "✕"} {notification.message}
+      {/* Toast notifications */}
+      <div className="toast-container">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast toast-${toast.type}`}>
+            <span className="toast-icon">
+              {toast.type === "success" ? "✓" : toast.type === "error" ? "✕" : "ℹ"}
+            </span>
+            <span className="toast-message">{toast.message}</span>
+            {toast.action && (
+              <button
+                className="toast-action"
+                onClick={() => {
+                  toast.action?.onClick();
+                  dismissToast(toast.id);
+                }}
+              >
+                {toast.action.label}
+              </button>
+            )}
+            <button className="toast-dismiss" onClick={() => dismissToast(toast.id)}>
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Command Palette */}
+      {commandPaletteOpen && (
+        <div className="command-palette-overlay" onClick={() => setCommandPaletteOpen(false)}>
+          <div className="command-palette" onClick={(e) => e.stopPropagation()}>
+            <div className="command-palette-input-wrapper">
+              <Icons.Search />
+              <input
+                type="text"
+                className="command-palette-input"
+                placeholder="Type a command or search..."
+                value={commandQuery}
+                onChange={(e) => setCommandQuery(e.target.value)}
+                autoFocus
+              />
+              <kbd className="command-palette-kbd">ESC</kbd>
+            </div>
+            <div className="command-palette-results">
+              {(() => {
+                let absoluteIndex = 0;
+                return Object.entries(groupedCommands).map(([category, cmds]) => (
+                  <div key={category} className="command-palette-group">
+                    <div className="command-palette-group-label">{category}</div>
+                    {cmds.map((cmd) => {
+                      const currentIndex = absoluteIndex++;
+                      return (
+                        <button
+                          key={cmd.id}
+                          className={`command-palette-item ${currentIndex === commandSelectedIndex ? "selected" : ""}`}
+                          onClick={() => executeCommand(cmd)}
+                          onMouseEnter={() => setCommandSelectedIndex(currentIndex)}
+                        >
+                          <span className="command-palette-item-label">{cmd.label}</span>
+                          {cmd.shortcut && <kbd className="command-palette-item-shortcut">{cmd.shortcut}</kbd>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ));
+              })()}
+              {filteredCommands.length === 0 && (
+                <div className="command-palette-empty">No commands found</div>
+              )}
+            </div>
+            <div className="command-palette-footer">
+              <span><kbd>↑↓</kbd> Navigate</span>
+              <span><kbd>↵</kbd> Select</span>
+              <span><kbd>ESC</kbd> Close</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1028,7 +1400,7 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
 
       <main className="main">
         <Sidebar
-          projects={projects}
+          projects={filteredProjects}
           selectedDiagram={selectedId}
           onSelectDiagram={(id) => {
             setSelectedId(id);
@@ -1039,6 +1411,10 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
           onRunAgent={handleRunAgent}
           runningAgent={runningAgent}
           isOpen={sidebarOpen}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebarCollapse}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
         />
 
         <div className="canvas-container">
@@ -1066,6 +1442,8 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
           onCopySpec={handleCopySpec}
           onExport={handleExport}
           isOpen={panelOpen}
+          activeTab={panelTab}
+          onTabChange={setPanelTab}
         />
       </main>
     </div>
