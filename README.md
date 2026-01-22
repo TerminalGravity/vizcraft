@@ -4,273 +4,241 @@
 
 > Claude generates JSON specs → Vizcraft renders interactive diagrams → User can edit → Changes sync back to Claude
 
-## The Problem
+## Features
 
-SVG generation is fragile - one wrong character and it breaks. Claude Code needs a robust, interactive visualization tool that:
-- Renders reliably every time
-- Supports pan/zoom/edit
-- Persists diagrams per project
-- Enables bidirectional Claude ↔ User editing
-
-## Comparison Matrix
-
-| Tool | Flowcharts | Freeform | Icons | Animations | Data Viz | Canvas | Export | Collab | Dark Mode | Pro UI | API |
-|------|------------|----------|-------|------------|----------|--------|--------|--------|-----------|--------|-----|
-| **React Flow** | ✅ Best | ❌ | ⚠️ DIY | ⚠️ DIY | ❌ | ✅ | ⚠️ | ⚠️ DIY | ⚠️ DIY | ⚠️ | ✅ |
-| **tldraw** | ✅ Good | ✅ Best | ✅ | ❌ | ❌ | ✅ Best | ✅ | ✅ Built | ✅ | ✅ Best | ✅ |
-| **Excalidraw** | ✅ Good | ✅ Best | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ Built | ✅ | ⚠️ Sketchy | ✅ |
-| **Rive** | ❌ | ✅ | ✅ | ✅ Best | ⚠️ | ❌ | ✅ | ❌ | ✅ | ✅ | ⚠️ |
-
-**Decision:** tldraw for freeform/explanatory, React Flow for pure architecture diagrams.
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         VIZCRAFT MCP                                 │
-│            "AI-Native Diagramming for Claude Code"                   │
-└──────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│  DOCKER COMPOSE STACK                                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐     │
-│  │   mcp-server    │  │    web-ui       │  │   sqlite        │     │
-│  │   (Bun+Hono)    │  │   (Bun+React)   │  │   (bun:sqlite)  │     │
-│  │   Port: 8420    │  │   Port: 3420    │  │                 │     │
-│  │                 │  │                 │  │                 │     │
-│  │  MCP Protocol   │  │  tldraw canvas  │  │  Diagrams       │     │
-│  │  SSE endpoint   │  │  Agent panel    │  │  Versions       │     │
-│  │  REST API       │  │  Project tree   │  │  Projects       │     │
-│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘     │
-│           │                    │                    │               │
-│           └────────────────────┴────────────────────┘               │
-│                              ↕                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  SHARED VOLUME: /vizcraft/data                               │  │
-│  │  - diagrams/*.json (tldraw format)                           │  │
-│  │  - exports/*.png, *.svg, *.pdf                               │  │
-│  │  - agents/*.yaml (custom agent configs)                      │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## MCP Tools (What Claude Code Sees)
-
-```typescript
-// Create new diagram
-mcp__vizcraft__create_diagram(
-    name: "exit-fix-architecture",
-    project: "sentient-trader",  // Auto-links to cwd
-    spec: {
-        nodes: [...],
-        edges: [...],
-        style: "professional-dark"
-    }
-) → returns { id, url, thumbnail }
-
-// Update existing
-mcp__vizcraft__update_diagram(
-    id: "abc123",
-    changes: [
-        { action: "add_node", node: {...} },
-        { action: "update_style", theme: "light" }
-    ]
-)
-
-// Get diagram as context (for Claude to reason about)
-mcp__vizcraft__describe_diagram(id: "abc123")
-→ returns structured description Claude can understand
-
-// Export
-mcp__vizcraft__export(id: "abc123", format: "png", path: "./docs/")
-
-// List project diagrams
-mcp__vizcraft__list_diagrams(project: "sentient-trader")
-```
-
-## Web UI
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  VIZCRAFT - sentient-trader                    [≡] [🌙] [👤]   │
-├──────────────┬──────────────────────────────────────────────────┤
-│              │                                                  │
-│  PROJECTS    │  ┌────────────────────────────────────────────┐ │
-│  ─────────   │  │                                            │ │
-│  ▼ sentient  │  │     [tldraw infinite canvas]              │ │
-│    ├ exit-fix│  │                                            │ │
-│    ├ arch    │  │     - Pan/zoom                            │ │
-│    └ flow    │  │     - Draw shapes                         │ │
-│              │  │     - Connect nodes                       │ │
-│  ▶ other-proj│  │     - Add text                            │ │
-│              │  │     - Import images                       │ │
-│              │  │                                            │ │
-│  ─────────   │  └────────────────────────────────────────────┘ │
-│  AGENTS      │                                                  │
-│  ─────────   │  ┌────────────────────────────────────────────┐ │
-│              │  │  AGENT PANEL                               │ │
-│  [⚡ Layout] │  │  ─────────────────────────────────────────  │ │
-│  [🎨 Style]  │  │  Selected: exit-fix-architecture           │ │
-│  [📝 Annotate│  │                                            │ │
-│  [✂️ Simplify]│  │  [🔄 Regenerate with Claude]              │ │
-│  [🤖 Custom] │  │  [📋 Copy spec to clipboard]               │ │
-│              │  │  [💬 Send to Claude Code]  ← MAGIC         │ │
-│  ─────────   │  │  [📤 Export PNG] [SVG] [PDF]              │ │
-│  [+ New Agent│  │                                            │ │
-│              │  └────────────────────────────────────────────┘ │
-└──────────────┴──────────────────────────────────────────────────┘
-```
-
-## The Magic: "Send to Claude Code" Flow
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Web UI     │     │  MCP Server │     │ Claude Code │
-│             │     │             │     │             │
-│ User clicks │────▶│ Generates   │────▶│ Receives    │
-│ "Send to    │     │ structured  │     │ context via │
-│  Claude"    │     │ prompt with │     │ MCP resource│
-│             │     │ diagram     │     │             │
-│             │     │ context     │     │ "I see your │
-│             │     │             │     │  diagram    │
-│             │     │             │     │  shows..."  │
-└─────────────┘     └─────────────┘     └─────────────┘
-```
-
-## Agent System
-
-```yaml
-# agents/layout-agent.yaml
-name: "Auto Layout"
-description: "Arrange nodes for clarity"
-type: "rule-based"
-triggers:
-  - manual
-  - on_create
-actions:
-  - dagre_layout
-  - snap_to_grid
-  - minimize_crossings
-
-# agents/style-agent.yaml
-name: "Professional Theme"
-type: "preset"
-styles:
-  node_fill: "#1e293b"
-  node_stroke: "#3b82f6"
-  edge_color: "#94a3b8"
-  font: "Inter"
-
-# agents/explain-agent.yaml
-name: "Add Annotations"
-type: "llm"
-provider: "anthropic"
-prompt: |
-  Look at this diagram and add helpful annotations
-  explaining each component's purpose.
-  Output as tldraw operations.
-```
-
-## Database Schema
-
-```sql
--- Diagrams table
-CREATE TABLE diagrams (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    project TEXT NOT NULL,
-    spec JSON NOT NULL,
-    thumbnail_url TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- Versions (git-like history)
-CREATE TABLE diagram_versions (
-    id TEXT PRIMARY KEY,
-    diagram_id TEXT REFERENCES diagrams(id),
-    version INTEGER,
-    spec JSON NOT NULL,
-    message TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- Agent runs
-CREATE TABLE agent_runs (
-    id TEXT PRIMARY KEY,
-    diagram_id TEXT REFERENCES diagrams(id),
-    agent_name TEXT,
-    input_version INTEGER,
-    output_version INTEGER,
-    status TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-## Key Features
-
-1. **Bidirectional Claude ↔ Diagram**: Claude creates diagrams, user edits, changes go back to Claude
-2. **Project-aware**: Auto-links to your git repo, diagrams live with code
-3. **Agent marketplace**: Share/import agent configs
-4. **Version control**: Git-like history for diagrams
-5. **Offline-first**: Works without internet, syncs when available
-6. **Multi-model agents**: Use Claude, GPT, or local Ollama for different agents
+- **MCP Server** - 6 tools for Claude Code integration (create, update, describe, list, delete, export)
+- **Interactive Canvas** - tldraw-powered infinite canvas with pan/zoom/edit
+- **AI Agents** - Rule-based (dagre layout), preset (themes), LLM-powered agents
+- **Export** - PNG, SVG, PDF export
+- **Version History** - Git-like versioning for diagrams
+- **Dark/Light Theme** - System-preference aware
+- **Mobile Responsive** - Works on tablet/mobile screens
 
 ## Quick Start
 
-```bash
-# One command to run
-docker compose up -d
+### Option 1: Run with Bun (Development)
 
-# Claude Code auto-discovers via .mcp.json
-# Add to your project's .mcp.json:
+```bash
+# Clone and install
+git clone https://github.com/TerminalGravity/vizcraft.git
+cd vizcraft
+bun install
+
+# Start MCP server (stdio) + Web UI
+bun run dev      # MCP server
+bun run web:dev  # Web UI on http://localhost:3420
+```
+
+### Option 2: Docker Compose (Production)
+
+```bash
+docker compose up -d
+```
+
+### Configure Claude Code
+
+Add to your project's `.mcp.json` or `~/.claude.json`:
+
+```json
 {
   "mcpServers": {
     "vizcraft": {
-      "url": "http://localhost:8420/mcp"
+      "command": "bun",
+      "args": ["run", "/path/to/vizcraft/src/server.ts"]
     }
   }
 }
 ```
 
+## MCP Tools
+
+```typescript
+// Create new diagram
+mcp__vizcraft__create_diagram({
+  name: "Architecture",
+  project: "my-project",
+  spec: {
+    type: "flowchart",
+    nodes: [
+      { id: "a", label: "Start", type: "circle" },
+      { id: "b", label: "Process", type: "box" },
+      { id: "c", label: "End", type: "circle" }
+    ],
+    edges: [
+      { from: "a", to: "b" },
+      { from: "b", to: "c" }
+    ]
+  }
+})
+
+// Update diagram
+mcp__vizcraft__update_diagram({ id: "abc123", spec: {...} })
+
+// Get diagram description for Claude
+mcp__vizcraft__describe_diagram({ id: "abc123" })
+
+// Export diagram
+mcp__vizcraft__export_diagram({ id: "abc123", format: "svg" })
+
+// List diagrams
+mcp__vizcraft__list_diagrams({ project: "my-project" })
+
+// Delete diagram
+mcp__vizcraft__delete_diagram({ id: "abc123" })
+```
+
+## Diagram Spec Format
+
+```typescript
+interface DiagramSpec {
+  type: "flowchart" | "architecture" | "sequence" | "freeform";
+  theme?: "dark" | "light" | "professional";
+  nodes: Array<{
+    id: string;
+    label: string;
+    type?: "box" | "diamond" | "circle" | "database" | "cloud" | "cylinder";
+    color?: string;
+    position?: { x: number; y: number };
+  }>;
+  edges: Array<{
+    from: string;
+    to: string;
+    label?: string;
+    style?: "solid" | "dashed" | "dotted";
+    color?: string;
+  }>;
+}
+```
+
+## Agent System
+
+Agents are YAML configs in `data/agents/` that transform diagrams:
+
+```yaml
+# Auto Layout (rule-based)
+name: "Auto Layout"
+type: "rule-based"
+actions:
+  - dagre_layout
+  - snap_to_grid
+
+# Theme Preset
+name: "Professional Theme"
+type: "preset"
+styles:
+  node_fill: "#1e293b"
+  node_stroke: "#3b82f6"
+  edge_color: "#64748b"
+
+# LLM Agent (requires API key)
+name: "Annotate"
+type: "llm"
+provider: "anthropic"
+prompt: "Add helpful annotations to this diagram"
+```
+
+Run agents via API:
+```bash
+POST /api/diagrams/:id/run-agent/:agentId
+```
+
+## Web UI
+
+- **Sidebar**: Project browser + Agent panel
+- **Canvas**: tldraw infinite canvas
+- **Panel**: Diagram info + Export buttons
+
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Cmd/Ctrl + N` | New diagram |
+| `Cmd/Ctrl + S` | Copy spec |
+| `Cmd/Ctrl + E` | Export PNG |
+| `Cmd/Ctrl + /` | Show help |
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/diagrams` | List diagrams |
+| GET | `/api/diagrams/:id` | Get diagram |
+| POST | `/api/diagrams` | Create diagram |
+| PUT | `/api/diagrams/:id` | Update diagram |
+| DELETE | `/api/diagrams/:id` | Delete diagram |
+| GET | `/api/diagrams/:id/versions` | Get version history |
+| GET | `/api/diagrams/:id/export/svg` | Export as SVG |
+| GET | `/api/agents` | List agents |
+| GET | `/api/agents/:id` | Get agent |
+| POST | `/api/diagrams/:id/run-agent/:agentId` | Run agent |
+
+## Tech Stack
+
+- **Runtime:** Bun
+- **MCP Server:** Hono + @modelcontextprotocol/sdk
+- **Database:** bun:sqlite
+- **Web UI:** React + tldraw
+- **Export:** jsPDF for PDF
+- **Layout:** @dagrejs/dagre for auto-layout
+
 ## Development
 
 ```bash
-# Install dependencies
+# Install
 bun install
-
-# Run dev server
-bun run dev
 
 # Run tests
 bun test
+
+# Build web UI
+bun run web:build
 
 # Build for production
 bun run build
 ```
 
-## Tech Stack
+## Project Structure
 
-- **Runtime:** Bun (fast, TypeScript-native)
-- **MCP Server:** Hono + @modelcontextprotocol/sdk
-- **Database:** bun:sqlite (built-in, zero deps)
-- **Web UI:** Bun.serve() + React + tldraw
-- **Packaging:** Docker + Docker Hub
+```
+vizcraft/
+├── src/
+│   ├── server.ts          # MCP server
+│   ├── web-server.ts      # Hono REST API
+│   ├── storage/db.ts      # SQLite layer
+│   ├── agents/
+│   │   ├── loader.ts      # YAML agent loader
+│   │   └── runner.ts      # Agent executor
+│   └── types/index.ts     # TypeScript types
+├── web/
+│   ├── app.tsx            # React app
+│   ├── index.html         # Entry
+│   └── styles.css         # Styling
+├── data/
+│   ├── diagrams/          # Diagram storage
+│   ├── exports/           # Exported files
+│   └── agents/            # Agent YAMLs
+└── package.json
+```
 
-## Roadmap
+## Completed Features
 
-- [ ] Core MCP server with create/read/update/delete
-- [ ] SQLite persistence layer
-- [ ] Basic web UI with tldraw
-- [ ] Export to PNG/SVG
-- [ ] Agent system (rule-based)
-- [ ] LLM agents (Anthropic/OpenAI)
-- [ ] Docker packaging
-- [ ] Claude Code plugin distribution
+- [x] MCP server with 6 tools
+- [x] SQLite persistence with versioning
+- [x] Web UI with tldraw canvas
+- [x] Export to PNG/SVG/PDF
+- [x] Agent system (rule-based, preset, LLM)
+- [x] Dagre auto-layout
+- [x] Theme presets
+- [x] Keyboard shortcuts
+- [x] Dark/light theme toggle
+- [x] Mobile responsive
+- [x] Toast notifications
+- [x] Integration tests
 
 ## License
 
 MIT
+
+---
+
+Built with [Claude Code](https://claude.com/claude-code)
