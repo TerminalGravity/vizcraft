@@ -1,0 +1,10 @@
+name: "Minimal Theme"
+description: "Clean, minimal styling with subtle colors"
+type: "preset"
+styles:
+  node_fill: "#f8fafc"
+  node_stroke: "#e2e8f0"
+  node_text: "#334155"
+  edge_color: "#94a3b8"
+  background: "#ffffff"
+  font_family: "system-ui, sans-serif"
