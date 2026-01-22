@@ -55,35 +55,50 @@ db.run(`
   )
 `);
 
-// Migration: Add version column if it doesn't exist (for existing databases)
-try {
-  db.run(`ALTER TABLE diagrams ADD COLUMN version INTEGER DEFAULT 1`);
-  console.log("[db] Added version column to diagrams table");
-} catch {
-  // Column already exists, ignore error
+/**
+ * Check if a column exists in a table
+ * Note: PRAGMA doesn't support parameterized queries, so we construct the query directly.
+ * The table name comes from our own code (not user input), so this is safe.
+ */
+function columnExists(table: string, column: string): boolean {
+  // PRAGMA requires direct string interpolation (doesn't support parameterized queries)
+  // This is safe because table/column names come from our own migration code
+  const rows = db.query<{ name: string }, []>(
+    `PRAGMA table_info(${table})`
+  ).all();
+  return rows.some(row => row.name === column);
 }
+
+/**
+ * Safely add a column to a table if it doesn't exist
+ * Uses PRAGMA table_info to check first, avoiding the need to catch errors
+ */
+function migrateAddColumn(
+  table: string,
+  column: string,
+  type: string,
+  defaultValue?: string | number
+): boolean {
+  if (columnExists(table, column)) {
+    return false; // Column already exists
+  }
+
+  const defaultClause = defaultValue !== undefined
+    ? ` DEFAULT ${typeof defaultValue === "string" ? `'${defaultValue}'` : defaultValue}`
+    : "";
+
+  db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}${defaultClause}`);
+  console.log(`[db] Added ${column} column to ${table} table`);
+  return true;
+}
+
+// Migration: Add version column if it doesn't exist (for existing databases)
+migrateAddColumn("diagrams", "version", "INTEGER", 1);
 
 // Migration: Add auth columns for ownership and access control
-try {
-  db.run(`ALTER TABLE diagrams ADD COLUMN owner_id TEXT`);
-  console.log("[db] Added owner_id column to diagrams table");
-} catch {
-  // Column already exists, ignore error
-}
-
-try {
-  db.run(`ALTER TABLE diagrams ADD COLUMN is_public INTEGER DEFAULT 0`);
-  console.log("[db] Added is_public column to diagrams table");
-} catch {
-  // Column already exists, ignore error
-}
-
-try {
-  db.run(`ALTER TABLE diagrams ADD COLUMN shares TEXT`);
-  console.log("[db] Added shares column to diagrams table");
-} catch {
-  // Column already exists, ignore error
-}
+migrateAddColumn("diagrams", "owner_id", "TEXT");
+migrateAddColumn("diagrams", "is_public", "INTEGER", 0);
+migrateAddColumn("diagrams", "shares", "TEXT");
 
 db.run(`
   CREATE TABLE IF NOT EXISTS diagram_versions (
