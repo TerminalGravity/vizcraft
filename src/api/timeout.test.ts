@@ -6,12 +6,14 @@ import { describe, it, expect } from "bun:test";
 import {
   TimeoutError,
   TIMEOUTS,
+  MAX_LIST_OFFSET,
   withTimeout,
   withTimeoutResult,
   createTimeoutWrapper,
   withLayoutTimeout,
   withAgentTimeout,
   withExportTimeout,
+  withListTimeout,
 } from "./timeout";
 
 describe("TimeoutError", () => {
@@ -28,16 +30,34 @@ describe("TimeoutError", () => {
 describe("TIMEOUTS", () => {
   it("has sensible default values", () => {
     expect(TIMEOUTS.STANDARD).toBeGreaterThan(0);
-    expect(TIMEOUTS.LAYOUT).toBeGreaterThan(TIMEOUTS.STANDARD);
+    expect(TIMEOUTS.LIST).toBeGreaterThan(TIMEOUTS.STANDARD);
+    expect(TIMEOUTS.LAYOUT).toBeGreaterThanOrEqual(TIMEOUTS.LIST);
     expect(TIMEOUTS.AGENT).toBeGreaterThan(TIMEOUTS.LAYOUT);
   });
 
   it("has all expected timeout types", () => {
     expect(TIMEOUTS.STANDARD).toBeDefined();
+    expect(TIMEOUTS.LIST).toBeDefined();
     expect(TIMEOUTS.LAYOUT).toBeDefined();
     expect(TIMEOUTS.THEME).toBeDefined();
     expect(TIMEOUTS.AGENT).toBeDefined();
     expect(TIMEOUTS.EXPORT).toBeDefined();
+  });
+
+  it("LIST timeout is 15 seconds", () => {
+    expect(TIMEOUTS.LIST).toBe(15_000);
+  });
+});
+
+describe("MAX_LIST_OFFSET", () => {
+  it("is defined and reasonable", () => {
+    expect(MAX_LIST_OFFSET).toBeDefined();
+    expect(MAX_LIST_OFFSET).toBeGreaterThan(0);
+    expect(MAX_LIST_OFFSET).toBeLessThanOrEqual(100_000); // Should be bounded
+  });
+
+  it("is 10000 by default", () => {
+    expect(MAX_LIST_OFFSET).toBe(10_000);
   });
 });
 
@@ -181,13 +201,33 @@ describe("Pre-configured wrappers", () => {
     const slowPromise = () => new Promise((resolve) => setTimeout(resolve, 500));
 
     // Test each wrapper with a short custom timeout
-    for (const wrapper of [withLayoutTimeout, withAgentTimeout, withExportTimeout]) {
+    for (const wrapper of [withLayoutTimeout, withAgentTimeout, withExportTimeout, withListTimeout]) {
       try {
         await wrapper(slowPromise(), 50);
         expect(true).toBe(false);
       } catch (err) {
         expect(err).toBeInstanceOf(TimeoutError);
       }
+    }
+  });
+
+  it("withListTimeout uses list timeout", async () => {
+    const fastPromise = Promise.resolve({ diagrams: [], total: 0 });
+
+    const result = await withListTimeout(fastPromise);
+
+    expect(result).toEqual({ diagrams: [], total: 0 });
+  });
+
+  it("withListTimeout throws TimeoutError for slow queries", async () => {
+    const slowPromise = new Promise((resolve) => setTimeout(resolve, 500));
+
+    try {
+      await withListTimeout(slowPromise, 50, "List diagrams");
+      expect(true).toBe(false);
+    } catch (err) {
+      expect(err).toBeInstanceOf(TimeoutError);
+      expect((err as TimeoutError).operation).toBe("List diagrams");
     }
   });
 });

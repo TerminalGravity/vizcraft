@@ -16,6 +16,7 @@ import {
   validationErrorResponse,
   operationResponse,
 } from "./api/responses";
+import { MAX_LIST_OFFSET } from "./api/timeout";
 
 // ==================== Test Database Setup ====================
 
@@ -283,7 +284,17 @@ function createTestApp() {
       const minimal = c.req.query("minimal") === "true";
 
       const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
-      const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
+      const rawOffset = offsetParam ? parseInt(offsetParam, 10) : 0;
+
+      // Validate offset bounds to prevent memory issues with large offsets
+      if (rawOffset > MAX_LIST_OFFSET) {
+        return validationErrorResponse(
+          c,
+          `Offset cannot exceed ${MAX_LIST_OFFSET}. Use search filters to narrow results.`,
+          { field: "offset", max: MAX_LIST_OFFSET, received: rawOffset }
+        );
+      }
+      const offset = rawOffset;
 
       const allDiagrams = testStorage.listDiagrams(project);
       const projects = testStorage.listProjects();
@@ -730,6 +741,36 @@ describe("Diagrams API", () => {
 
       expect(data.projects).toContain("alpha");
       expect(data.projects).toContain("beta");
+    });
+
+    it("rejects offset exceeding maximum", async () => {
+      // MAX_LIST_OFFSET is 10,000
+      const res = await apiRequest("GET", "/api/diagrams?offset=10001");
+      expect(res.status).toBe(400);
+
+      const data = await res.json();
+      expect(data.error.code).toBe("VALIDATION_ERROR");
+      expect(data.error.message).toContain("Offset cannot exceed");
+      expect(data.error.message).toContain("10000");
+      expect(data.error.details.field).toBe("offset");
+      expect(data.error.details.received).toBe(10001);
+    });
+
+    it("accepts offset at maximum boundary", async () => {
+      // MAX_LIST_OFFSET is 10,000 - should be accepted
+      const res = await apiRequest("GET", "/api/diagrams?offset=10000");
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.offset).toBe(10000);
+    });
+
+    it("clamps limit to maximum 100", async () => {
+      const res = await apiRequest("GET", "/api/diagrams?limit=500");
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      expect(data.limit).toBe(100); // Clamped to max
     });
   });
 

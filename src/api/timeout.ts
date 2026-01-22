@@ -24,6 +24,8 @@ export class TimeoutError extends Error {
 export const TIMEOUTS = {
   /** Standard API operations (CRUD) */
   STANDARD: 10_000, // 10 seconds
+  /** List operations with filters (can be slower due to complex queries) */
+  LIST: 15_000, // 15 seconds
   /** Layout calculations */
   LAYOUT: 30_000, // 30 seconds
   /** Theme applications */
@@ -33,6 +35,12 @@ export const TIMEOUTS = {
   /** Export operations */
   EXPORT: 30_000, // 30 seconds
 } as const;
+
+/**
+ * Maximum allowed offset for list operations
+ * Prevents memory issues with very large offsets
+ */
+export const MAX_LIST_OFFSET = 10_000;
 
 /**
  * Execute a promise with a timeout
@@ -123,3 +131,4 @@ export function createTimeoutWrapper(timeoutMs: number, operation: string) {
 export const withLayoutTimeout = createTimeoutWrapper(TIMEOUTS.LAYOUT, "Layout calculation");
 export const withAgentTimeout = createTimeoutWrapper(TIMEOUTS.AGENT, "Agent execution");
 export const withExportTimeout = createTimeoutWrapper(TIMEOUTS.EXPORT, "Export operation");
+export const withListTimeout = createTimeoutWrapper(TIMEOUTS.LIST, "List operation");

@@ -47,8 +47,10 @@ import { diagramBodyLimit, thumbnailBodyLimit, smallBodyLimit } from "./api/body
 import { responseCompression } from "./api/response-compression";
 import {
   withTimeout,
+  withListTimeout,
   TimeoutError,
   TIMEOUTS,
+  MAX_LIST_OFFSET,
 } from "./api/timeout";
 import {
   shutdownMiddleware,
@@ -152,6 +154,15 @@ app.onError((err, c) => {
     return errorResponse(c, err.code, err.message, err.status as 400 | 404 | 500);
   }
 
+  if (err instanceof TimeoutError) {
+    return errorResponse(
+      c,
+      "REQUEST_TIMEOUT",
+      `Operation timed out after ${Math.round(err.timeoutMs / 1000)}s`,
+      408
+    );
+  }
+
   if (err instanceof SyntaxError) {
     return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
   }
@@ -203,7 +214,7 @@ app.get("/metrics", (c) => {
 });
 
 // List diagrams with SQL-level pagination, sorting, search, and filtering
-app.get("/api/diagrams", (c) => {
+app.get("/api/diagrams", async (c) => {
   try {
     // Parse query parameters
     const project = c.req.query("project");
@@ -223,8 +234,18 @@ app.get("/api/diagrams", (c) => {
 
     // Validate and parse parameters
     const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100) : 50;
-    const offset = offsetParam ? Math.max(parseInt(offsetParam, 10), 0) : 0;
+    const rawOffset = offsetParam ? Math.max(parseInt(offsetParam, 10), 0) : 0;
     const types = typesParam ? typesParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
+
+    // Validate offset bounds to prevent memory issues with large offsets
+    if (rawOffset > MAX_LIST_OFFSET) {
+      return validationErrorResponse(
+        c,
+        `Offset cannot exceed ${MAX_LIST_OFFSET}. Use search filters to narrow results.`,
+        { field: "offset", max: MAX_LIST_OFFSET, received: rawOffset }
+      );
+    }
+    const offset = rawOffset;
 
     // Build cache key from all parameters (including date filters)
     const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${createdAfter || ""}:${createdBefore || ""}:${updatedAfter || ""}:${updatedBefore || ""}:${minimal}`;
@@ -239,22 +260,26 @@ app.get("/api/diagrams", (c) => {
       return c.json(cached);
     }
 
-    // Use SQL-level pagination for better performance
-    const { data: diagrams, total } = storage.listDiagramsPaginated({
-      project,
-      limit,
-      offset,
-      sortBy,
-      sortOrder,
-      search,
-      types,
-      createdAfter,
-      createdBefore,
-      updatedAfter,
-      updatedBefore,
+    // Use SQL-level pagination with timeout for better performance
+    const queryPromise = Promise.resolve().then(() => {
+      const result = storage.listDiagramsPaginated({
+        project,
+        limit,
+        offset,
+        sortBy,
+        sortOrder,
+        search,
+        types,
+        createdAfter,
+        createdBefore,
+        updatedAfter,
+        updatedBefore,
+      });
+      const projects = storage.listProjects();
+      return { ...result, projects };
     });
 
-    const projects = storage.listProjects();
+    const { data: diagrams, total, projects } = await withListTimeout(queryPromise);
 
     // Calculate pagination metadata
     const totalPages = Math.ceil(total / limit);
@@ -314,6 +339,16 @@ app.get("/api/diagrams", (c) => {
 
     return c.json(response);
   } catch (err) {
+    // Handle timeout specifically with 408 Request Timeout
+    if (err instanceof TimeoutError) {
+      console.warn(`[API] List diagrams timed out after ${err.timeoutMs}ms`);
+      return errorResponse(
+        c,
+        "REQUEST_TIMEOUT",
+        `List operation timed out after ${Math.round(err.timeoutMs / 1000)}s. Try using more specific filters to narrow results.`,
+        408
+      );
+    }
     throw new APIError("LIST_FAILED", "Failed to list diagrams", 500);
   }
 });
