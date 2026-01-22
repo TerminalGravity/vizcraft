@@ -97,6 +97,28 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : ["http://localhost:3420", "http://127.0.0.1:3420"];
 
+// Maximum origin length to prevent DoS via oversized origin headers
+const MAX_ORIGIN_LENGTH = 256;
+
+/**
+ * Check if origin is a localhost URL (without regex to prevent ReDoS)
+ * Uses URL parsing for safe validation
+ */
+function isLocalhostOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    // Only allow http/https protocols
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return false;
+    }
+    // Check for localhost hostname (not regex, just string comparison)
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  } catch {
+    // Invalid URL
+    return false;
+  }
+}
+
 // Log CORS configuration in development
 if (process.env.NODE_ENV !== "production") {
   console.log(`[CORS] Allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
@@ -116,13 +138,20 @@ app.use(
       // Allow requests with no origin (like mobile apps, curl, or same-origin)
       if (!origin) return null;
 
-      // Check if origin is in allowed list
+      // Defense-in-depth: reject oversized origins to prevent DoS
+      if (origin.length > MAX_ORIGIN_LENGTH) {
+        console.warn(`[CORS] Rejected oversized origin (${origin.length} chars)`);
+        return null;
+      }
+
+      // Check if origin is in allowed list (O(n) but list is small)
       if (ALLOWED_ORIGINS.includes(origin)) {
         return origin;
       }
 
       // In development, also allow localhost with any port
-      if (process.env.NODE_ENV !== "production" && origin.match(/^https?:\/\/localhost(:\d+)?$/)) {
+      // Uses URL parsing instead of regex to prevent potential ReDoS
+      if (process.env.NODE_ENV !== "production" && isLocalhostOrigin(origin)) {
         return origin;
       }
 
