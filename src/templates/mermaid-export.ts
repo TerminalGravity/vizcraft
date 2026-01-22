@@ -44,14 +44,14 @@ function exportFlowchart(spec: DiagramSpec): string {
     const from = sanitizeId(edge.from);
     const to = sanitizeId(edge.to);
     const arrow = edge.style === "dashed" ? "-.->" : "-->";
-    const label = edge.label ? `|${edge.label}|` : "";
+    const label = edge.label ? `|${sanitizeLabel(edge.label)}|` : "";
     lines.push(`    ${from} ${arrow}${label} ${to}`);
   }
 
   // Add subgraphs for groups
   if (spec.groups?.length) {
     for (const group of spec.groups) {
-      lines.push(`    subgraph ${sanitizeId(group.id)}[${group.label}]`);
+      lines.push(`    subgraph ${sanitizeId(group.id)}[${sanitizeLabel(group.label)}]`);
       for (const nodeId of group.nodeIds) {
         lines.push(`        ${sanitizeId(nodeId)}`);
       }
@@ -68,7 +68,7 @@ function exportSequence(spec: DiagramSpec): string {
   // Declare participants
   for (const node of spec.nodes) {
     const type = node.type === "actor" ? "actor" : "participant";
-    lines.push(`    ${type} ${sanitizeId(node.id)} as ${node.label}`);
+    lines.push(`    ${type} ${sanitizeId(node.id)} as ${sanitizeLabel(node.label)}`);
   }
 
   // Add messages
@@ -96,7 +96,7 @@ function exportSequence(spec: DiagramSpec): string {
         default:
           arrow = "->>";
       }
-      lines.push(`    ${from}${arrow}${to}: ${msg.label}`);
+      lines.push(`    ${from}${arrow}${to}: ${sanitizeLabel(msg.label)}`);
     }
   }
 
@@ -117,7 +117,7 @@ function exportStateDiagram(spec: DiagramSpec): string {
     } else if (node.type === "fork" || node.type === "join") {
       lines.push(`    state ${sanitizeId(node.id)} <<fork>>`);
     } else {
-      lines.push(`    ${sanitizeId(node.id)}: ${node.label}`);
+      lines.push(`    ${sanitizeId(node.id)}: ${sanitizeLabel(node.label)}`);
     }
   }
 
@@ -128,10 +128,10 @@ function exportStateDiagram(spec: DiagramSpec): string {
     const toNode = spec.nodes.find((n) => n.id === edge.to);
 
     if (toNode?.type === "final") {
-      const label = edge.label ? `: ${edge.label}` : "";
+      const label = edge.label ? `: ${sanitizeLabel(edge.label)}` : "";
       lines.push(`    ${from} --> [*]${label}`);
     } else {
-      const label = edge.label ? `: ${edge.label}` : "";
+      const label = edge.label ? `: ${sanitizeLabel(edge.label)}` : "";
       lines.push(`    ${from} --> ${to}${label}`);
     }
   }
@@ -185,7 +185,7 @@ function exportClassDiagram(spec: DiagramSpec): string {
     }
 
     const label = edge.label && !["extends", "implements", "composition", "aggregation"].some((k) => edge.label?.includes(k))
-      ? `: ${edge.label}`
+      ? `: ${sanitizeLabel(edge.label)}`
       : "";
 
     lines.push(`    ${from} ${arrow} ${to}${label}`);
@@ -240,7 +240,7 @@ function exportERDiagram(spec: DiagramSpec): string {
           card = "||--o{";
       }
 
-      const label = rel.label ? ` : ${rel.label}` : "";
+      const label = rel.label ? ` : ${sanitizeLabel(rel.label)}` : "";
       lines.push(`    ${e1} ${card} ${e2}${label}`);
     }
   }
@@ -254,7 +254,7 @@ function exportMindmap(spec: DiagramSpec): string {
   // Find central node
   const central = spec.nodes.find((n) => n.type === "central");
   if (central) {
-    lines.push(`  root((${central.label}))`);
+    lines.push(`  root((${sanitizeLabel(central.label)}))`);
 
     // Build tree from edges
     const edges = new Map<string, string[]>();
@@ -272,7 +272,7 @@ function exportMindmap(spec: DiagramSpec): string {
         const child = spec.nodes.find((n) => n.id === childId);
         if (child) {
           const indent = "  ".repeat(depth + 1);
-          lines.push(`${indent}${child.label}`);
+          lines.push(`${indent}${sanitizeLabel(child.label)}`);
           addChildren(childId, depth + 1);
         }
       }
@@ -312,6 +312,31 @@ function getMermaidShape(node: DiagramNode): string {
  */
 function sanitizeId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
+/**
+ * Sanitize label for Mermaid to prevent syntax injection
+ * Escapes characters that have special meaning in Mermaid syntax:
+ * - | (pipe) - edge label delimiters
+ * - [ ] { } ( ) < > - node shape delimiters
+ * - # - unicode/comments
+ * - ; - statement separator
+ * - " - string delimiter
+ * - : - label separator in some contexts
+ */
+function sanitizeLabel(label: string): string {
+  // Replace special Mermaid characters with HTML entities or safe alternatives
+  return label
+    .replace(/\|/g, "&#124;")  // pipe
+    .replace(/\[/g, "&#91;")   // left bracket
+    .replace(/]/g, "&#93;")    // right bracket
+    .replace(/\{/g, "&#123;")  // left brace
+    .replace(/}/g, "&#125;")   // right brace
+    .replace(/</g, "&lt;")     // less than
+    .replace(/>/g, "&gt;")     // greater than
+    .replace(/#/g, "&#35;")    // hash
+    .replace(/;/g, "&#59;")    // semicolon
+    .replace(/"/g, "&quot;");  // double quote
 }
 
 /**
