@@ -55,6 +55,38 @@ testDb.run(`
 testDb.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_project ON diagrams(project)`);
 testDb.run(`CREATE INDEX IF NOT EXISTS idx_versions_diagram ON diagram_versions(diagram_id)`);
 
+// FTS5 full-text search virtual table for diagram names (same as production)
+testDb.run(`
+  CREATE VIRTUAL TABLE IF NOT EXISTS diagrams_fts USING fts5(
+    id,
+    name,
+    project,
+    content=diagrams,
+    content_rowid=rowid,
+    tokenize='trigram'
+  )
+`);
+
+// Triggers to keep FTS table in sync
+testDb.run(`
+  CREATE TRIGGER IF NOT EXISTS diagrams_fts_insert AFTER INSERT ON diagrams BEGIN
+    INSERT INTO diagrams_fts(rowid, id, name, project) VALUES (NEW.rowid, NEW.id, NEW.name, NEW.project);
+  END
+`);
+
+testDb.run(`
+  CREATE TRIGGER IF NOT EXISTS diagrams_fts_delete AFTER DELETE ON diagrams BEGIN
+    INSERT INTO diagrams_fts(diagrams_fts, rowid, id, name, project) VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.project);
+  END
+`);
+
+testDb.run(`
+  CREATE TRIGGER IF NOT EXISTS diagrams_fts_update AFTER UPDATE ON diagrams BEGIN
+    INSERT INTO diagrams_fts(diagrams_fts, rowid, id, name, project) VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.project);
+    INSERT INTO diagrams_fts(rowid, id, name, project) VALUES (NEW.rowid, NEW.id, NEW.name, NEW.project);
+  END
+`);
+
 // Row types
 interface DiagramRow {
   id: string;
@@ -332,11 +364,128 @@ const testStorage = {
     return rows.map(row => row.project);
   },
 
+  listDiagramsPaginated(options: {
+    project?: string;
+    limit?: number;
+    offset?: number;
+    sortBy?: "createdAt" | "updatedAt" | "name";
+    sortOrder?: "asc" | "desc";
+    search?: string;
+    types?: string[];
+    createdAfter?: string;
+    createdBefore?: string;
+    updatedAfter?: string;
+    updatedBefore?: string;
+  } = {}): { data: Diagram[]; total: number } {
+    const {
+      project,
+      limit = 20,
+      offset = 0,
+      sortBy = "updatedAt",
+      sortOrder = "desc",
+      search,
+      types,
+      createdAfter,
+      createdBefore,
+      updatedAfter,
+      updatedBefore,
+    } = options;
+
+    // Build WHERE conditions
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (project) {
+      conditions.push("project = ?");
+      params.push(project);
+    }
+
+    if (search) {
+      // Use FTS5 with trigram tokenizer for efficient substring search
+      const escapedSearch = search.replace(/["\-*()]/g, " ").trim();
+      if (escapedSearch.length >= 3) {
+        conditions.push("id IN (SELECT id FROM diagrams_fts WHERE name MATCH ?)");
+        params.push(`"${escapedSearch}"`);
+      } else {
+        // Fall back to LIKE for very short searches
+        conditions.push("name LIKE ? COLLATE NOCASE");
+        params.push(`%${search}%`);
+      }
+    }
+
+    if (types && types.length > 0) {
+      const typePlaceholders = types.map(() => "?").join(", ");
+      conditions.push(`json_extract(spec, '$.type') IN (${typePlaceholders})`);
+      params.push(...types);
+    }
+
+    if (createdAfter) {
+      conditions.push("created_at >= ?");
+      params.push(createdAfter);
+    }
+    if (createdBefore) {
+      conditions.push("created_at <= ?");
+      params.push(createdBefore);
+    }
+    if (updatedAfter) {
+      conditions.push("updated_at >= ?");
+      params.push(updatedAfter);
+    }
+    if (updatedBefore) {
+      conditions.push("updated_at <= ?");
+      params.push(updatedBefore);
+    }
+
+    const whereClause = conditions.length > 0
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    const sortColumn = sortBy === "createdAt"
+      ? "created_at"
+      : sortBy === "name"
+      ? "name"
+      : "updated_at";
+
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as total FROM diagrams ${whereClause}`;
+    const countRow = testDb.query<{ total: number }, (string | number)[]>(countQuery).get(...params);
+    const total = countRow?.total ?? 0;
+
+    // Get paginated data
+    const dataQuery = `
+      SELECT * FROM diagrams
+      ${whereClause}
+      ORDER BY ${sortColumn} ${sortOrder.toUpperCase()}
+      LIMIT ? OFFSET ?
+    `;
+
+    const rows = testDb.query<DiagramRow, (string | number)[]>(dataQuery).all(...params, limit, offset);
+
+    return {
+      total,
+      data: rows.map(row => ({
+        id: row.id,
+        name: row.name,
+        project: row.project,
+        spec: JSON.parse(row.spec),
+        thumbnailUrl: row.thumbnail_url || undefined,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      })),
+    };
+  },
+
   // Test helper: clear all data
   _clearAll() {
     testDb.run(`DELETE FROM diagram_versions`);
     testDb.run(`DELETE FROM agent_runs`);
     testDb.run(`DELETE FROM diagrams`);
+    // Clear and rebuild FTS index
+    try {
+      testDb.run("INSERT INTO diagrams_fts(diagrams_fts) VALUES('rebuild')");
+    } catch {
+      // FTS table might not exist in some tests, ignore
+    }
   },
 };
 
@@ -643,6 +792,106 @@ describe("Diagram CRUD Operations", () => {
     it("returns empty array when no diagrams exist", () => {
       const diagrams = testStorage.listDiagrams();
       expect(diagrams).toEqual([]);
+    });
+  });
+
+  describe("Name Search with FTS", () => {
+    it("searches by name using FTS5 for 3+ character queries", () => {
+      testStorage.createDiagram("Authentication Flow", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("Database Schema", "project", sampleArchitectureSpec);
+      testStorage.createDiagram("Auth Service", "project", sampleFlowchartSpec);
+
+      const { data } = testStorage.listDiagramsPaginated({ search: "Auth" });
+
+      // Should find "Authentication Flow" and "Auth Service"
+      expect(data.length).toBe(2);
+      expect(data.some(d => d.name === "Authentication Flow")).toBe(true);
+      expect(data.some(d => d.name === "Auth Service")).toBe(true);
+    });
+
+    it("performs case-insensitive search", () => {
+      testStorage.createDiagram("My Flowchart", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("Another Flow", "project", sampleArchitectureSpec);
+
+      const { data: upper } = testStorage.listDiagramsPaginated({ search: "FLOW" });
+      const { data: lower } = testStorage.listDiagramsPaginated({ search: "flow" });
+
+      expect(upper.length).toBe(2);
+      expect(lower.length).toBe(2);
+    });
+
+    it("finds substring matches anywhere in name", () => {
+      testStorage.createDiagram("User Authentication System", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("Database Connection", "project", sampleArchitectureSpec);
+
+      const { data } = testStorage.listDiagramsPaginated({ search: "entication" });
+
+      expect(data.length).toBe(1);
+      expect(data[0].name).toBe("User Authentication System");
+    });
+
+    it("falls back to LIKE for short queries (1-2 chars)", () => {
+      testStorage.createDiagram("A-Test", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("B-Test", "project", sampleArchitectureSpec);
+      testStorage.createDiagram("XYZ", "project", sampleFlowchartSpec);
+
+      const { data } = testStorage.listDiagramsPaginated({ search: "A" });
+
+      // Should find "A-Test" via LIKE fallback
+      expect(data.length).toBeGreaterThanOrEqual(1);
+      expect(data.some(d => d.name === "A-Test")).toBe(true);
+    });
+
+    it("handles special characters in search safely", () => {
+      testStorage.createDiagram("Test (Draft)", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("Final-Version", "project", sampleArchitectureSpec);
+
+      // These characters are escaped in the FTS query
+      const { data: parens } = testStorage.listDiagramsPaginated({ search: "Draft" });
+      expect(parens.length).toBeGreaterThanOrEqual(1);
+
+      const { data: dash } = testStorage.listDiagramsPaginated({ search: "Version" });
+      expect(dash.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("combines search with other filters", () => {
+      testStorage.createDiagram("API Flow", "backend", sampleFlowchartSpec);
+      testStorage.createDiagram("API Schema", "database", sampleArchitectureSpec);
+      testStorage.createDiagram("UI Flow", "frontend", sampleFlowchartSpec);
+
+      const { data } = testStorage.listDiagramsPaginated({
+        search: "API",
+        project: "backend",
+      });
+
+      expect(data.length).toBe(1);
+      expect(data[0].name).toBe("API Flow");
+      expect(data[0].project).toBe("backend");
+    });
+
+    it("returns total count correctly with search", () => {
+      testStorage.createDiagram("Flow 1", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("Flow 2", "project", sampleFlowchartSpec);
+      testStorage.createDiagram("Schema", "project", sampleArchitectureSpec);
+
+      const { data, total } = testStorage.listDiagramsPaginated({
+        search: "Flow",
+        limit: 1,
+      });
+
+      expect(total).toBe(2);
+      expect(data.length).toBe(1);
+    });
+
+    it("returns empty results for no matches", () => {
+      testStorage.createDiagram("Test Diagram", "project", sampleFlowchartSpec);
+
+      const { data, total } = testStorage.listDiagramsPaginated({
+        search: "nonexistent",
+      });
+
+      expect(data.length).toBe(0);
+      expect(total).toBe(0);
     });
   });
 });

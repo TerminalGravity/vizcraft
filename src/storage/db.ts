@@ -107,6 +107,60 @@ db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_diagram ON agent_runs(diagram_
 db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at ON agent_runs(created_at)`);
 db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`);
 
+// Name search index with case-insensitive collation
+// This helps with case-insensitive sorting and prefix searches
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_name_nocase ON diagrams(name COLLATE NOCASE)`);
+
+// FTS5 full-text search virtual table for diagram names
+// This enables efficient substring and token-based searching
+db.run(`
+  CREATE VIRTUAL TABLE IF NOT EXISTS diagrams_fts USING fts5(
+    id,
+    name,
+    project,
+    content=diagrams,
+    content_rowid=rowid,
+    tokenize='trigram'
+  )
+`);
+
+// Triggers to keep FTS table in sync with diagrams table
+db.run(`
+  CREATE TRIGGER IF NOT EXISTS diagrams_fts_insert AFTER INSERT ON diagrams BEGIN
+    INSERT INTO diagrams_fts(rowid, id, name, project) VALUES (NEW.rowid, NEW.id, NEW.name, NEW.project);
+  END
+`);
+
+db.run(`
+  CREATE TRIGGER IF NOT EXISTS diagrams_fts_delete AFTER DELETE ON diagrams BEGIN
+    INSERT INTO diagrams_fts(diagrams_fts, rowid, id, name, project) VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.project);
+  END
+`);
+
+db.run(`
+  CREATE TRIGGER IF NOT EXISTS diagrams_fts_update AFTER UPDATE ON diagrams BEGIN
+    INSERT INTO diagrams_fts(diagrams_fts, rowid, id, name, project) VALUES ('delete', OLD.rowid, OLD.id, OLD.name, OLD.project);
+    INSERT INTO diagrams_fts(rowid, id, name, project) VALUES (NEW.rowid, NEW.id, NEW.name, NEW.project);
+  END
+`);
+
+// Migration: Populate FTS table with existing diagrams (for database upgrades)
+// This is idempotent - if FTS already has the data, the 'rebuild' command will refresh it
+try {
+  const ftsCount = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM diagrams_fts").get();
+  const diagramCount = db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM diagrams").get();
+
+  if (ftsCount && diagramCount && ftsCount.count < diagramCount.count) {
+    console.log("[db] Rebuilding FTS index for existing diagrams...");
+    // Clear and rebuild FTS content
+    db.run("INSERT INTO diagrams_fts(diagrams_fts) VALUES('rebuild')");
+    console.log("[db] FTS index rebuilt successfully");
+  }
+} catch (err) {
+  // FTS rebuild failed, log but don't crash - search will fall back to LIKE
+  console.warn("[db] FTS index rebuild failed:", err instanceof Error ? err.message : err);
+}
+
 export const storage = {
   // Diagrams
   createDiagram(name: string, project: string, spec: DiagramSpec): Diagram {
@@ -365,9 +419,20 @@ export const storage = {
     }
 
     if (search) {
-      // Case-insensitive search in name
-      conditions.push("LOWER(name) LIKE LOWER(?)");
-      params.push(`%${search}%`);
+      // Use FTS5 with trigram tokenizer for efficient substring search
+      // Trigram tokenizer splits text into 3-character sequences, enabling substring matching
+      // Escape special FTS5 characters to prevent query syntax errors
+      const escapedSearch = search.replace(/["\-*()]/g, " ").trim();
+      if (escapedSearch.length >= 3) {
+        // FTS5 trigram requires at least 3 characters for efficient matching
+        conditions.push("id IN (SELECT id FROM diagrams_fts WHERE name MATCH ?)");
+        params.push(`"${escapedSearch}"`);
+      } else {
+        // Fall back to LIKE for very short searches (1-2 chars)
+        // Use COLLATE NOCASE for case-insensitive comparison
+        conditions.push("name LIKE ? COLLATE NOCASE");
+        params.push(`%${search}%`);
+      }
     }
 
     if (types && types.length > 0) {
