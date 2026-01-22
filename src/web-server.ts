@@ -8,8 +8,13 @@ import { cors } from "hono/cors";
 import { storage } from "./storage/db";
 import { loadAgents, getAgent } from "./agents/loader";
 import { runAgent } from "./agents/runner";
+import { getProviderRegistry, listConfiguredProviders } from "./llm";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
+
+// Configuration
+const PORT = parseInt(process.env.WEB_PORT || "3420");
+const DATA_DIR = process.env.DATA_DIR || "./data";
 
 const app = new Hono();
 app.use("*", cors());
@@ -46,43 +51,92 @@ app.get("/api/diagrams/:id", (c) => {
 
 // Create diagram
 app.post("/api/diagrams", async (c) => {
-  const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
-  if (!body.name || !body.spec) return c.json({ error: "name and spec required" }, 400);
-  const diagram = storage.createDiagram(body.name, body.project || "default", body.spec);
-  return c.json(diagram, 201);
+  try {
+    const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
+
+    if (!body.name?.trim()) {
+      return c.json({ error: true, message: "Name is required", code: "MISSING_NAME" }, 400);
+    }
+    if (!body.spec) {
+      return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
+    }
+    if (!body.spec.type || !body.spec.nodes) {
+      return c.json({ error: true, message: "Spec must have type and nodes", code: "INVALID_SPEC" }, 400);
+    }
+
+    const diagram = storage.createDiagram(body.name.trim(), body.project?.trim() || "default", body.spec);
+    return c.json(diagram, 201);
+  } catch (err) {
+    console.error("POST /api/diagrams error:", err);
+    if (err instanceof SyntaxError) {
+      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+    }
+    return c.json({ error: true, message: "Failed to create diagram", code: "CREATE_FAILED" }, 500);
+  }
 });
 
 // Update diagram
 app.put("/api/diagrams/:id", async (c) => {
-  const id = c.req.param("id");
-  const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
-  if (!storage.getDiagram(id)) return c.json({ error: "Diagram not found" }, 404);
-  const updated = storage.updateDiagram(id, body.spec, body.message);
-  return c.json(updated);
+  try {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
+
+    if (!body.spec) {
+      return c.json({ error: true, message: "Spec is required", code: "MISSING_SPEC" }, 400);
+    }
+
+    if (!storage.getDiagram(id)) {
+      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+    }
+
+    const updated = storage.updateDiagram(id, body.spec, body.message);
+    return c.json(updated);
+  } catch (err) {
+    console.error("PUT /api/diagrams/:id error:", err);
+    if (err instanceof SyntaxError) {
+      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+    }
+    return c.json({ error: true, message: "Failed to update diagram", code: "UPDATE_FAILED" }, 500);
+  }
 });
 
 // Delete diagram
 app.delete("/api/diagrams/:id", (c) => {
-  const id = c.req.param("id");
-  if (!storage.deleteDiagram(id)) return c.json({ error: "Diagram not found" }, 404);
-  return c.json({ success: true });
+  try {
+    const id = c.req.param("id");
+    if (!storage.deleteDiagram(id)) {
+      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+    }
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("DELETE /api/diagrams/:id error:", err);
+    return c.json({ error: true, message: "Failed to delete diagram", code: "DELETE_FAILED" }, 500);
+  }
 });
 
 // Update diagram thumbnail
 app.put("/api/diagrams/:id/thumbnail", async (c) => {
-  const id = c.req.param("id");
-  const body = await c.req.json<{ thumbnail: string }>();
+  try {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ thumbnail: string }>();
 
-  if (!body.thumbnail) {
-    return c.json({ error: "thumbnail data URL required" }, 400);
+    if (!body.thumbnail) {
+      return c.json({ error: true, message: "Thumbnail data URL required", code: "MISSING_THUMBNAIL" }, 400);
+    }
+
+    if (!storage.getDiagram(id)) {
+      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+    }
+
+    const success = storage.updateThumbnail(id, body.thumbnail);
+    return c.json({ success });
+  } catch (err) {
+    console.error("PUT /api/diagrams/:id/thumbnail error:", err);
+    if (err instanceof SyntaxError) {
+      return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
+    }
+    return c.json({ error: true, message: "Failed to update thumbnail", code: "THUMBNAIL_FAILED" }, 500);
   }
-
-  if (!storage.getDiagram(id)) {
-    return c.json({ error: "Diagram not found" }, 404);
-  }
-
-  const success = storage.updateThumbnail(id, body.thumbnail);
-  return c.json({ success });
 });
 
 // Get versions
@@ -117,33 +171,69 @@ app.get("/api/agents/:id", async (c) => {
   return c.json(agent);
 });
 
+// Get LLM provider status
+app.get("/api/llm/status", async (c) => {
+  try {
+    const registry = getProviderRegistry();
+    const status = await registry.getStatus();
+    const configured = listConfiguredProviders();
+
+    return c.json({
+      configured: configured.map((p) => ({
+        type: p.type,
+        name: p.name,
+      })),
+      status,
+      defaultProvider: registry.getDefault()?.type || null,
+    });
+  } catch (err) {
+    console.error("GET /api/llm/status error:", err);
+    return c.json({ error: true, message: "Failed to get LLM status", code: "LLM_STATUS_ERROR" }, 500);
+  }
+});
+
 // Run agent on diagram
 app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
-  const diagramId = c.req.param("diagramId");
-  const agentId = c.req.param("agentId");
+  try {
+    const diagramId = c.req.param("diagramId");
+    const agentId = c.req.param("agentId");
 
-  const diagram = storage.getDiagram(diagramId);
-  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
+    const diagram = storage.getDiagram(diagramId);
+    if (!diagram) {
+      return c.json({ error: true, message: "Diagram not found", code: "DIAGRAM_NOT_FOUND" }, 404);
+    }
 
-  const agent = await getAgent(agentId);
-  if (!agent) return c.json({ error: "Agent not found" }, 404);
+    const agent = await getAgent(agentId);
+    if (!agent) {
+      return c.json({ error: true, message: "Agent not found", code: "AGENT_NOT_FOUND" }, 404);
+    }
 
-  const result = await runAgent(agent, diagram.spec);
+    const result = await runAgent(agent, diagram.spec);
 
-  if (result.success && result.spec) {
-    // Update the diagram with the new spec
-    const updated = storage.updateDiagram(diagramId, result.spec, `Agent: ${agent.name}`);
+    if (result.success && result.spec) {
+      // Update the diagram with the new spec
+      const updated = storage.updateDiagram(diagramId, result.spec, `Agent: ${agent.name}`);
+      return c.json({
+        success: true,
+        changes: result.changes,
+        diagram: updated,
+      });
+    }
+
     return c.json({
-      success: true,
-      changes: result.changes,
-      diagram: updated,
-    });
+      success: false,
+      error: true,
+      message: result.error || "Agent execution failed",
+      code: "AGENT_FAILED",
+    }, 400);
+  } catch (err) {
+    console.error("POST /api/diagrams/:diagramId/run-agent/:agentId error:", err);
+    return c.json({
+      error: true,
+      message: err instanceof Error ? err.message : "Failed to run agent",
+      code: "AGENT_EXECUTION_ERROR",
+    }, 500);
   }
-
-  return c.json({
-    success: false,
-    error: result.error,
-  }, 400);
 });
 
 // Export diagram as SVG (server-side generation)
@@ -271,7 +361,6 @@ function escapeXml(str: string): string {
 }
 
 // Server setup
-const PORT = parseInt(process.env.WEB_PORT || "3420");
 const WEB_DIR = join(import.meta.dir, "..", "web");
 
 const mimeTypes: Record<string, string> = {

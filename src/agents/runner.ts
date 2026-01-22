@@ -6,6 +6,7 @@
 import dagre from "@dagrejs/dagre";
 import type { DiagramSpec, DiagramNode } from "../types";
 import type { LoadedAgent } from "./loader";
+import { getProvider } from "../llm";
 
 export interface AgentRunResult {
   success: boolean;
@@ -92,12 +93,58 @@ async function runPresetAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Ag
   return { success: true, spec: currentSpec, changes };
 }
 
-// LLM agents (placeholder - requires API integration)
+// LLM agents - uses model-agnostic provider system
 async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<AgentRunResult> {
-  // For now, return a message that LLM integration is coming
+  // Get the appropriate provider (defaults to Anthropic)
+  const provider = getProvider(agent.provider);
+
+  if (!provider) {
+    return {
+      success: false,
+      error: `No LLM provider configured. Set ANTHROPIC_API_KEY environment variable.`,
+    };
+  }
+
+  if (!provider.isConfigured) {
+    return {
+      success: false,
+      error: `${provider.name} is not configured. Check your API key.`,
+    };
+  }
+
+  if (!agent.prompt) {
+    return {
+      success: false,
+      error: `LLM agent "${agent.name}" has no prompt defined.`,
+    };
+  }
+
+  // Run the transformation
+  const result = await provider.transformDiagram({
+    spec,
+    prompt: agent.prompt,
+    context: agent.description,
+    maxRetries: 2,
+  });
+
+  if (result.success && result.spec) {
+    // Log usage for debugging
+    if (result.usage) {
+      console.error(
+        `[llm] ${agent.name}: ${result.usage.inputTokens} input, ${result.usage.outputTokens} output tokens (${result.usage.model})`
+      );
+    }
+
+    return {
+      success: true,
+      spec: result.spec,
+      changes: result.changes,
+    };
+  }
+
   return {
     success: false,
-    error: `LLM agent "${agent.name}" requires API integration. Configure ANTHROPIC_API_KEY to enable.`,
+    error: result.error || "LLM transformation failed",
   };
 }
 

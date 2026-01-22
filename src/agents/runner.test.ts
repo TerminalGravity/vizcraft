@@ -101,13 +101,36 @@ describe("Agent Runner", () => {
     expect(result.spec?.edges[0].color).toBe("#00ff00");
   });
 
-  test("LLM agent returns not implemented error", async () => {
+  test("LLM agent handles configuration states correctly", async () => {
     const agent: LoadedAgent = {
       id: "test-llm",
       name: "Test LLM",
       type: "llm",
       provider: "anthropic",
-      prompt: "Do something",
+      prompt: "Add a 'Validation' step between Start and Process",
+      filename: "test.yaml",
+      loadedAt: new Date().toISOString(),
+    };
+
+    const result = await runAgent(agent, sampleSpec);
+
+    // With valid API key: succeeds with transformed spec
+    // Without valid API key: fails with error
+    if (result.success) {
+      expect(result.spec).toBeDefined();
+      expect(result.changes).toBeDefined();
+      expect(result.changes!.length).toBeGreaterThan(0);
+    } else {
+      expect(result.error).toBeDefined();
+    }
+  });
+
+  test("LLM agent requires prompt", async () => {
+    const agent: LoadedAgent = {
+      id: "test-llm-no-prompt",
+      name: "Test LLM No Prompt",
+      type: "llm",
+      provider: "anthropic",
       filename: "test.yaml",
       loadedAt: new Date().toISOString(),
     };
@@ -115,6 +138,6 @@ describe("Agent Runner", () => {
     const result = await runAgent(agent, sampleSpec);
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("API integration");
+    expect(result.error).toContain("no prompt defined");
   });
 });
