@@ -21,6 +21,8 @@ import {
   DiagramTypeSchema,
   validateRequest,
   ValidationError,
+  safeParseSpec,
+  parseSpecStrict,
   LIMITS,
 } from "./schemas";
 
@@ -565,5 +567,121 @@ describe("ValidationError", () => {
     expect(error.code).toBe("VALIDATION_ERROR");
     expect(error.status).toBe(400);
     expect(error.name).toBe("ValidationError");
+  });
+});
+
+describe("safeParseSpec", () => {
+  it("parses valid spec JSON", () => {
+    const json = JSON.stringify({
+      type: "flowchart",
+      nodes: [{ id: "a", label: "A" }],
+      edges: [],
+    });
+
+    const result = safeParseSpec(json);
+
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.spec.type).toBe("flowchart");
+      expect(result.spec.nodes).toHaveLength(1);
+    }
+  });
+
+  it("returns valid=false for invalid spec but still returns data", () => {
+    const json = JSON.stringify({
+      type: "unknown-type", // Invalid type
+      nodes: [],
+      edges: [],
+    });
+
+    const result = safeParseSpec(json);
+
+    expect(result.valid).toBe(false);
+    // Still returns the parsed data for backwards compatibility
+    expect(result.spec).toBeDefined();
+    if (!result.valid) {
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.raw).toBeDefined();
+    }
+  });
+
+  it("handles JSON parse errors gracefully", () => {
+    const badJson = "not valid json {{{";
+
+    const result = safeParseSpec(badJson);
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.errors[0]).toContain("JSON parse error");
+      // Returns fallback freeform spec
+      expect(result.spec.type).toBe("freeform");
+      expect(result.spec.nodes).toEqual([]);
+      expect(result.spec.edges).toEqual([]);
+    }
+  });
+
+  it("validates edge references", () => {
+    const json = JSON.stringify({
+      type: "flowchart",
+      nodes: [{ id: "a", label: "A" }],
+      edges: [{ from: "a", to: "nonexistent" }], // Invalid reference
+    });
+
+    const result = safeParseSpec(json);
+
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.errors.some(e => e.includes("Edges must reference existing node IDs"))).toBe(true);
+    }
+  });
+
+  it("logs warning with context when provided", () => {
+    // This test verifies behavior - in practice, console.warn would be called
+    const json = JSON.stringify({
+      type: "invalid-type",
+      nodes: [],
+      edges: [],
+    });
+
+    // Should not throw even with invalid data
+    const result = safeParseSpec(json, "diagram:test-123");
+    expect(result.valid).toBe(false);
+  });
+});
+
+describe("parseSpecStrict", () => {
+  it("returns spec for valid JSON", () => {
+    const json = JSON.stringify({
+      type: "flowchart",
+      nodes: [{ id: "a", label: "A" }],
+      edges: [],
+    });
+
+    const spec = parseSpecStrict(json);
+
+    expect(spec.type).toBe("flowchart");
+    expect(spec.nodes).toHaveLength(1);
+  });
+
+  it("throws for invalid spec", () => {
+    const json = JSON.stringify({
+      type: "invalid",
+      nodes: [],
+      edges: [],
+    });
+
+    expect(() => parseSpecStrict(json)).toThrow("Invalid diagram spec");
+  });
+
+  it("throws for invalid JSON", () => {
+    const badJson = "not valid json";
+
+    expect(() => parseSpecStrict(badJson)).toThrow("Invalid diagram spec");
+  });
+
+  it("includes context in error message", () => {
+    const badJson = "{}";
+
+    expect(() => parseSpecStrict(badJson, "test-context")).toThrow("(test-context)");
   });
 });

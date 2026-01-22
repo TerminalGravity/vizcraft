@@ -374,6 +374,104 @@ export function validateRequest<T extends z.ZodType>(
 }
 
 /**
+ * Result of safe spec parsing
+ */
+export type SafeParseSpecResult =
+  | { valid: true; spec: DiagramSpec; raw?: never }
+  | { valid: false; spec: DiagramSpec; raw: unknown; errors: string[] };
+
+/**
+ * Safely parse and validate a diagram spec from JSON string
+ *
+ * This function:
+ * 1. Parses the JSON string
+ * 2. Validates against DiagramSpecSchema
+ * 3. Returns the spec with validity info
+ *
+ * For database reads, this allows returning potentially corrupted data
+ * while flagging it as invalid (for logging/monitoring purposes).
+ *
+ * @param json - JSON string to parse
+ * @param context - Optional context for logging (e.g., "diagram:abc123")
+ * @returns Parsed spec with validity status
+ */
+export function safeParseSpec(json: string, context?: string): SafeParseSpecResult {
+  let parsed: unknown;
+
+  // Step 1: Parse JSON
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    // JSON parse failure - this is a critical error
+    // Return empty spec as fallback
+    const errorMsg = err instanceof Error ? err.message : "Unknown JSON parse error";
+    if (context) {
+      console.error(`[validation] JSON parse failed for ${context}: ${errorMsg}`);
+    }
+    const fallbackSpec: DiagramSpec = {
+      type: "freeform",
+      nodes: [],
+      edges: [],
+    };
+    return {
+      valid: false,
+      spec: fallbackSpec,
+      raw: json,
+      errors: [`JSON parse error: ${errorMsg}`],
+    };
+  }
+
+  // Step 2: Validate against schema
+  const result = DiagramSpecSchema.safeParse(parsed);
+
+  if (result.success) {
+    return { valid: true, spec: result.data };
+  }
+
+  // Validation failed - return the raw parsed data cast to DiagramSpec
+  // This allows existing data to continue working even if validation rules changed
+  const errors = result.error.issues.map(issue => {
+    const path = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+    return `${path}${issue.message}`;
+  });
+
+  if (context) {
+    console.warn(
+      `[validation] Invalid spec for ${context}: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` (+${errors.length - 3} more)` : ""}`
+    );
+  }
+
+  // Return the raw parsed data as DiagramSpec (type assertion)
+  // This is intentionally lenient to avoid breaking reads of old data
+  return {
+    valid: false,
+    spec: parsed as DiagramSpec,
+    raw: parsed,
+    errors,
+  };
+}
+
+/**
+ * Parse spec with strict validation (throws on invalid)
+ *
+ * Use this for API input validation where invalid data should be rejected.
+ *
+ * @param json - JSON string to parse
+ * @param context - Context for error messages
+ * @throws Error if parsing or validation fails
+ */
+export function parseSpecStrict(json: string, context?: string): DiagramSpec {
+  const result = safeParseSpec(json, context);
+
+  if (!result.valid) {
+    const errorContext = context ? ` (${context})` : "";
+    throw new Error(`Invalid diagram spec${errorContext}: ${result.errors.join("; ")}`);
+  }
+
+  return result.spec;
+}
+
+/**
  * Create Hono middleware for request validation
  */
 export function createValidator<T extends z.ZodType>(schema: T) {

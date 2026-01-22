@@ -8,6 +8,7 @@
 import { Database } from "bun:sqlite";
 import { nanoid } from "nanoid";
 import type { Diagram, DiagramSpec, DiagramVersion } from "../types";
+import { safeParseSpec } from "../validation/schemas";
 import {
   saveThumbnail,
   loadThumbnail,
@@ -139,11 +140,14 @@ export const storage = {
 
     if (!row) return null;
 
+    // Parse and validate spec with context for logging
+    const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
+
     return {
       id: row.id,
       name: row.name,
       project: row.project,
-      spec: JSON.parse(row.spec),
+      spec,
       thumbnailUrl: row.thumbnail_url || undefined,
       version: row.version ?? 1,
       createdAt: row.created_at,
@@ -307,15 +311,18 @@ export const storage = {
           `SELECT * FROM diagrams ORDER BY updated_at DESC`
         ).all();
 
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      project: row.project,
-      spec: JSON.parse(row.spec),
-      thumbnailUrl: row.thumbnail_url || undefined,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    return rows.map((row) => {
+      const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
+      return {
+        id: row.id,
+        name: row.name,
+        project: row.project,
+        spec,
+        thumbnailUrl: row.thumbnail_url || undefined,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
   },
 
   /**
@@ -425,15 +432,18 @@ export const storage = {
     const rows = db.query<DiagramRow, (string | number)[]>(dataQuery)
       .all(...params, limit, offset);
 
-    const data = rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      project: row.project,
-      spec: JSON.parse(row.spec),
-      thumbnailUrl: row.thumbnail_url || undefined,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    const data = rows.map((row) => {
+      const { spec } = safeParseSpec(row.spec, `diagram:${row.id}`);
+      return {
+        id: row.id,
+        name: row.name,
+        project: row.project,
+        spec,
+        thumbnailUrl: row.thumbnail_url || undefined,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
 
     return { data, total };
   },
@@ -490,14 +500,17 @@ export const storage = {
       `SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC`
     ).all(diagramId);
 
-    return rows.map(row => ({
-      id: row.id,
-      diagramId: row.diagram_id,
-      version: row.version,
-      spec: JSON.parse(row.spec),
-      message: row.message || undefined,
-      createdAt: row.created_at,
-    }));
+    return rows.map(row => {
+      const { spec } = safeParseSpec(row.spec, `version:${diagramId}:${row.version}`);
+      return {
+        id: row.id,
+        diagramId: row.diagram_id,
+        version: row.version,
+        spec,
+        message: row.message || undefined,
+        createdAt: row.created_at,
+      };
+    });
   },
 
   /**
@@ -529,14 +542,17 @@ export const storage = {
       `SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC LIMIT ? OFFSET ?`
     ).all(diagramId, limit, offset);
 
-    const versions = rows.map(row => ({
-      id: row.id,
-      diagramId: row.diagram_id,
-      version: row.version,
-      spec: JSON.parse(row.spec) as DiagramSpec,
-      message: row.message || undefined,
-      createdAt: row.created_at,
-    }));
+    const versions = rows.map(row => {
+      const { spec } = safeParseSpec(row.spec, `version:${diagramId}:${row.version}`);
+      return {
+        id: row.id,
+        diagramId: row.diagram_id,
+        version: row.version,
+        spec,
+        message: row.message || undefined,
+        createdAt: row.created_at,
+      };
+    });
 
     return { versions, total };
   },
@@ -575,11 +591,12 @@ export const storage = {
 
     if (!row) return null;
 
+    const { spec } = safeParseSpec(row.spec, `version:${diagramId}:${row.version}`);
     return {
       id: row.id,
       diagramId: row.diagram_id,
       version: row.version,
-      spec: JSON.parse(row.spec),
+      spec,
       message: row.message || undefined,
       createdAt: row.created_at,
     };
@@ -592,11 +609,12 @@ export const storage = {
 
     if (!row) return null;
 
+    const { spec } = safeParseSpec(row.spec, `version:${diagramId}:${row.version}`);
     return {
       id: row.id,
       diagramId: row.diagram_id,
       version: row.version,
-      spec: JSON.parse(row.spec),
+      spec,
       message: row.message || undefined,
       createdAt: row.created_at,
     };
