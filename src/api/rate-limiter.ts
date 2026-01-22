@@ -74,11 +74,11 @@ interface RateLimitState {
 // In production, use Redis for distributed rate limiting
 const rateLimitStore = new Map<string, RateLimitState>();
 
-// Cleanup configuration
-const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const MAX_STORE_SIZE = 100_000; // Maximum entries to prevent memory exhaustion
-const ABSOLUTE_TTL = 60 * 60 * 1000; // 1 hour absolute TTL for any entry
-const EVICTION_BATCH_SIZE = 100; // Number of entries to evict when at capacity
+// Cleanup configuration (configurable via environment for different deployments)
+const CLEANUP_INTERVAL = parseInt(process.env.RATE_LIMIT_CLEANUP_INTERVAL_MS ?? "300000", 10); // 5 minutes default
+const MAX_STORE_SIZE = parseInt(process.env.RATE_LIMIT_MAX_STORE ?? "100000", 10); // 100k entries default
+const ABSOLUTE_TTL = parseInt(process.env.RATE_LIMIT_TTL_MS ?? "3600000", 10); // 1 hour default
+const EVICTION_BATCH_SIZE = parseInt(process.env.RATE_LIMIT_EVICTION_BATCH ?? "100", 10); // 100 entries default
 let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 let lastCleanupTime = Date.now();
 
