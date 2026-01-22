@@ -437,8 +437,12 @@ app.get("/api/diagrams", async (c) => {
     }
     const offset = rawOffset;
 
-    // Build cache key from all parameters (including date filters)
-    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${createdAfter || ""}:${createdBefore || ""}:${updatedAfter || ""}:${updatedBefore || ""}:${includeFullSpec}`;
+    // Get user context for permission filtering and cache key
+    const user = getCurrentUser(c);
+    const userIdForCache = user?.id || "anonymous";
+
+    // Build cache key from all parameters (including user for permission-filtered results)
+    const cacheKey = `list:${userIdForCache}:${project || "all"}:${limit}:${offset}:${sortBy || "updatedAt"}:${sortOrder || "desc"}:${search || ""}:${types?.join(",") || ""}:${createdAfter || ""}:${createdBefore || ""}:${updatedAfter || ""}:${updatedBefore || ""}:${includeFullSpec}`;
     const cached = listCache.get(cacheKey);
     if (cached) {
       const etag = generateETag(cached);
@@ -469,7 +473,24 @@ app.get("/api/diagrams", async (c) => {
       return { ...result, projects };
     });
 
-    const { data: diagrams, total, projects } = await withListTimeout(queryPromise);
+    const { data: allDiagrams, total: rawTotal, projects } = await withListTimeout(queryPromise);
+
+    // Filter diagrams based on user permissions
+    // This ensures users only see diagrams they have access to:
+    // - Diagrams they own
+    // - Public diagrams
+    // - Diagrams shared with them
+    const diagrams = allDiagrams.filter((d) => {
+      const ownership = parseOwnership(d);
+      return canRead(user, ownership);
+    });
+
+    // Adjust total count to reflect permission-filtered results
+    // Note: This is an approximation since SQL-level filtering isn't implemented yet
+    // For accurate counts, SQL-level permission filtering should be added to storage
+    const total = diagrams.length < allDiagrams.length
+      ? Math.min(rawTotal, diagrams.length + offset) // Approximate total visible
+      : rawTotal;
 
     // Calculate pagination metadata
     const totalPages = Math.ceil(total / limit);
