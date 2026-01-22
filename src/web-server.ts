@@ -1181,8 +1181,22 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
       throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
     }
 
-    // Update diagram with new positions
-    const updated = storage.updateDiagram(id, result.spec!, `Applied layout: ${body.algorithm}`);
+    // Update diagram with new positions using safe transform (handles conflicts)
+    const updateResult = storage.transformDiagram(
+      id,
+      () => result.spec!,
+      `Applied layout: ${body.algorithm}`
+    );
+
+    if (updateResult && "error" in updateResult) {
+      throw new APIError(
+        "CONCURRENT_MODIFICATION",
+        "Diagram was modified by another user. Please refresh and try again.",
+        409
+      );
+    }
+
+    const updated = updateResult;
 
     // Broadcast to collaborators
     broadcastDiagramSync(id, result.spec!);
@@ -1268,8 +1282,30 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
       return notFoundResponse(c, "Diagram", id);
     }
 
-    const themedSpec = applyThemeToDiagram(diagram.spec, body.themeId);
-    const updated = storage.updateDiagram(id, themedSpec, `Applied theme: ${body.themeId}`);
+    const themeId = body.themeId;
+
+    // Use safe transform to handle concurrent modifications
+    const updateResult = storage.transformDiagram(
+      id,
+      (currentSpec) => applyThemeToDiagram(currentSpec, themeId),
+      `Applied theme: ${themeId}`
+    );
+
+    if (updateResult === null) {
+      return notFoundResponse(c, "Diagram", id);
+    }
+
+    if ("error" in updateResult) {
+      return errorResponse(
+        c,
+        "CONCURRENT_MODIFICATION",
+        "Diagram was modified by another user. Please refresh and try again.",
+        409
+      );
+    }
+
+    const themedSpec = updateResult.spec;
+    const updated = updateResult;
 
     // Broadcast to collaborators
     broadcastDiagramSync(id, themedSpec);
@@ -1310,8 +1346,31 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
     );
 
     if (result.success && result.spec) {
-      // Update the diagram with the new spec
-      const updated = storage.updateDiagram(diagramId, result.spec, `Agent: ${agent.name}`);
+      // Update the diagram with version check to detect concurrent modifications
+      // Note: Agent operations are expensive, so we don't retry on conflict
+      // Instead, we fail and ask the user to retry manually
+      const updateResult = storage.updateDiagram(
+        diagramId,
+        result.spec,
+        `Agent: ${agent.name}`,
+        diagram.version // Use version from when we started
+      );
+
+      // Handle conflict - diagram was modified while agent was running
+      if (updateResult && "conflict" in updateResult) {
+        return errorResponse(
+          c,
+          "CONCURRENT_MODIFICATION",
+          `Diagram was modified (v${diagram.version} → v${updateResult.currentVersion}) while agent was running. Please refresh and try again.`,
+          409
+        );
+      }
+
+      if (!updateResult) {
+        return notFoundResponse(c, "Diagram", diagramId);
+      }
+
+      const updated = updateResult;
 
       // Broadcast to collaborators
       broadcastDiagramSync(diagramId, result.spec);

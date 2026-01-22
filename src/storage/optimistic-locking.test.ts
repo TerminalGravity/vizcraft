@@ -200,4 +200,159 @@ describe("Optimistic Locking - Storage Layer", () => {
       expect(retrieved2?.version).toBe(2);
     });
   });
+
+  describe("transformDiagram", () => {
+    test("applies transformation and returns updated diagram", () => {
+      const diagram = storage.createDiagram("Transform Test", "test-lock", testSpec);
+      createdIds.push(diagram.id);
+
+      const result = storage.transformDiagram(
+        diagram.id,
+        (spec) => ({
+          ...spec,
+          nodes: [...spec.nodes, { id: "new", label: "New Node", type: "box" }],
+        }),
+        "Added new node"
+      );
+
+      expect(result).not.toBeNull();
+      expect(typeof result === "object" && "error" in result).toBe(false);
+      if (result && !("error" in result)) {
+        expect(result.version).toBe(2);
+        expect(result.spec.nodes).toHaveLength(3);
+      }
+    });
+
+    test("returns null for nonexistent diagram", () => {
+      const result = storage.transformDiagram(
+        "nonexistent-id",
+        (spec) => spec,
+        "Should not work"
+      );
+
+      expect(result).toBeNull();
+    });
+
+    test("retries on conflict and succeeds", () => {
+      const diagram = storage.createDiagram("Transform Retry Test", "test-lock", testSpec);
+      createdIds.push(diagram.id);
+
+      let callCount = 0;
+      const result = storage.transformDiagram(
+        diagram.id,
+        (spec) => {
+          callCount++;
+          // Simulate a concurrent update on first call
+          if (callCount === 1) {
+            storage.forceUpdateDiagram(diagram.id, updatedSpec, "Concurrent update");
+          }
+          return {
+            ...spec,
+            nodes: [...spec.nodes, { id: "transform", label: "Transform", type: "box" }],
+          };
+        },
+        "Transform with retry"
+      );
+
+      // Should succeed after retry
+      expect(result).not.toBeNull();
+      expect(typeof result === "object" && "error" in result).toBe(false);
+      // Transform was called twice - once failed, once succeeded
+      expect(callCount).toBe(2);
+    });
+
+    test("returns error after max retries exceeded", () => {
+      const diagram = storage.createDiagram("Max Retry Test", "test-lock", testSpec);
+      createdIds.push(diagram.id);
+
+      let callCount = 0;
+      const result = storage.transformDiagram(
+        diagram.id,
+        (spec) => {
+          callCount++;
+          // Always cause a concurrent update to trigger conflict
+          storage.forceUpdateDiagram(diagram.id, {
+            ...spec,
+            nodes: [...spec.nodes, { id: `concurrent-${callCount}`, label: `C${callCount}`, type: "box" }],
+          });
+          return {
+            ...spec,
+            nodes: [...spec.nodes, { id: "transform", label: "Transform", type: "box" }],
+          };
+        },
+        "Transform with max retries",
+        3 // maxRetries
+      );
+
+      // Should fail with MAX_RETRIES_EXCEEDED
+      expect(result).not.toBeNull();
+      expect(typeof result === "object" && "error" in result).toBe(true);
+      if (result && "error" in result) {
+        expect(result.error).toBe("MAX_RETRIES_EXCEEDED");
+        expect(result.attempts).toBe(3);
+      }
+      // Transform was called maxRetries times
+      expect(callCount).toBe(3);
+    });
+
+    test("uses latest spec on retry", () => {
+      const diagram = storage.createDiagram("Latest Spec Test", "test-lock", testSpec);
+      createdIds.push(diagram.id);
+
+      let seenNodeCounts: number[] = [];
+      let callCount = 0;
+
+      const result = storage.transformDiagram(
+        diagram.id,
+        (spec) => {
+          callCount++;
+          seenNodeCounts.push(spec.nodes.length);
+
+          // Cause conflict on first call
+          if (callCount === 1) {
+            storage.forceUpdateDiagram(diagram.id, {
+              ...spec,
+              nodes: [...spec.nodes, { id: "extra1", label: "Extra1", type: "box" }, { id: "extra2", label: "Extra2", type: "box" }],
+            });
+          }
+
+          return {
+            ...spec,
+            nodes: [...spec.nodes, { id: "final", label: "Final", type: "box" }],
+          };
+        },
+        "Check latest spec"
+      );
+
+      expect(result).not.toBeNull();
+      expect(typeof result === "object" && "error" in result).toBe(false);
+      // First call saw 2 nodes (original), second call saw 4 nodes (after concurrent update)
+      expect(seenNodeCounts).toEqual([2, 4]);
+    });
+
+    test("respects custom maxRetries", () => {
+      const diagram = storage.createDiagram("Custom Retry Test", "test-lock", testSpec);
+      createdIds.push(diagram.id);
+
+      let callCount = 0;
+      const result = storage.transformDiagram(
+        diagram.id,
+        (spec) => {
+          callCount++;
+          // Always cause conflict
+          storage.forceUpdateDiagram(diagram.id, { ...spec, nodes: [...spec.nodes, { id: `c${callCount}`, label: "C", type: "box" }] });
+          return spec;
+        },
+        "Custom retries",
+        5 // Custom maxRetries
+      );
+
+      expect(result).not.toBeNull();
+      expect(typeof result === "object" && "error" in result).toBe(true);
+      if (result && "error" in result) {
+        expect(result.attempts).toBe(5);
+      }
+      expect(callCount).toBe(5);
+    });
+  });
 });

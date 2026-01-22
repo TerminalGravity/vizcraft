@@ -267,7 +267,9 @@ server.tool(
     }
 
     const newSpec = spec || existing.spec;
-    const updated = storage.updateDiagram(id, newSpec as DiagramSpec, message);
+    // Use forceUpdate for MCP tools - Claude doesn't track versions
+    // and conflicts would be confusing in the LLM context
+    const updated = storage.forceUpdateDiagram(id, newSpec as DiagramSpec, message);
 
     return {
       content: [

@@ -211,6 +211,68 @@ export const storage = {
     return this.updateDiagram(id, spec, message) as Diagram | null;
   },
 
+  /**
+   * Atomically transform a diagram with conflict retry
+   *
+   * This is the safe way for server operations to update diagrams.
+   * Reads the diagram, applies the transform, and saves with version check.
+   * On conflict, automatically retries with fresh data (up to maxRetries).
+   *
+   * @param id - Diagram ID
+   * @param transform - Function that transforms the diagram spec
+   * @param message - Version message for the update
+   * @param maxRetries - Maximum retry attempts on conflict (default: 3)
+   * @returns Updated diagram, null if not found, or error info
+   */
+  transformDiagram(
+    id: string,
+    transform: (spec: DiagramSpec) => DiagramSpec,
+    message?: string,
+    maxRetries: number = 3
+  ): Diagram | null | { error: "MAX_RETRIES_EXCEEDED"; attempts: number } {
+    let attempts = 0;
+
+    while (attempts < maxRetries) {
+      attempts++;
+
+      // Read current state with version
+      const current = this.getDiagram(id);
+      if (!current) {
+        return null;
+      }
+
+      // Apply transformation
+      const transformedSpec = transform(current.spec);
+
+      // Attempt to save with version check
+      const result = this.updateDiagram(id, transformedSpec, message, current.version);
+
+      // Success - return the updated diagram
+      if (result && !("conflict" in result)) {
+        return result;
+      }
+
+      // Not found (shouldn't happen but handle it)
+      if (result === null) {
+        return null;
+      }
+
+      // Conflict - retry with fresh data
+      // Log conflict in development for debugging
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          `[db] transformDiagram conflict for ${id}: expected v${current.version}, found v${result.currentVersion}. Retry ${attempts}/${maxRetries}`
+        );
+      }
+    }
+
+    // Exceeded max retries - this indicates high contention
+    console.warn(
+      `[db] transformDiagram exceeded max retries for ${id} after ${attempts} attempts`
+    );
+    return { error: "MAX_RETRIES_EXCEEDED", attempts };
+  },
+
   async deleteDiagram(id: string): Promise<boolean> {
     // Delete associated thumbnail file
     await deleteThumbnail(id);
