@@ -10,10 +10,14 @@
 
 import { join } from "path";
 import { existsSync, mkdirSync, unlinkSync } from "fs";
+import { validateDataUrl, isValidDataUrl, InvalidDataUrlError } from "../utils/path-safety";
 
 // Configuration
 const DATA_DIR = process.env.DATA_DIR || "./data";
 const THUMBNAIL_DIR = join(DATA_DIR, "thumbnails");
+
+// Allowed MIME types specifically for thumbnails (images only)
+const THUMBNAIL_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 // Ensure thumbnail directory exists
 if (!existsSync(THUMBNAIL_DIR)) {
@@ -21,17 +25,27 @@ if (!existsSync(THUMBNAIL_DIR)) {
 }
 
 /**
- * Convert data URL to Buffer
+ * Convert data URL to Buffer with security validation
+ * Only accepts image MIME types (PNG, JPEG, WebP)
  */
 export function dataUrlToBuffer(dataUrl: string): Buffer | null {
   try {
-    // Data URL format: data:image/png;base64,<data>
-    const matches = dataUrl.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
-    if (!matches) {
+    // Use centralized validation for security
+    const validated = validateDataUrl(dataUrl);
+
+    // Additional check: only allow image types for thumbnails
+    if (!THUMBNAIL_MIME_TYPES.has(validated.mimeType)) {
+      console.error(
+        `[thumbnails] Rejected non-image MIME type: ${validated.mimeType}`
+      );
       return null;
     }
-    return Buffer.from(matches[2], "base64");
-  } catch {
+
+    return Buffer.from(validated.data, "base64");
+  } catch (err) {
+    if (err instanceof InvalidDataUrlError) {
+      console.error(`[thumbnails] Invalid data URL: ${err.message}`);
+    }
     return null;
   }
 }

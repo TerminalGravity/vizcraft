@@ -28,4 +28,19 @@ export {
 } from "./retry";
 
 // Path safety utilities
-export { isPathSafe, normalizePath, getSafeBasename } from "./path-safety";
+export {
+  sanitizeFilename,
+  isPathWithinDirectory,
+  validateExtension,
+  isExtensionAllowed,
+  validateDataUrl,
+  isValidDataUrl,
+  createSafeExportPath,
+  validateExportPath,
+  ALLOWED_EXTENSIONS,
+  ALLOWED_MIME_TYPES,
+  MIME_TO_EXTENSION,
+  ExtensionNotAllowedError,
+  PathTraversalError,
+  InvalidDataUrlError,
+} from "./path-safety";
