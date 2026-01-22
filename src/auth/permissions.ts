@@ -6,6 +6,7 @@
  */
 
 import type { UserContext } from "./middleware";
+import type { Diagram } from "../types";
 
 export type Permission = "owner" | "editor" | "viewer" | "none";
 
@@ -72,24 +73,73 @@ export function getEffectivePermission(
 
 /**
  * Check if user can perform a specific action
+ *
+ * These functions support two calling conventions:
+ * 1. canRead(permission) - Check a pre-computed permission
+ * 2. canRead(user, ownership) - Compute permission from user and ownership
  */
-export function canRead(permission: Permission): boolean {
+export function canRead(permission: Permission): boolean;
+export function canRead(user: UserContext | null, ownership: DiagramOwnership): boolean;
+export function canRead(
+  permissionOrUser: Permission | UserContext | null,
+  ownership?: DiagramOwnership
+): boolean {
+  const permission =
+    ownership !== undefined
+      ? getEffectivePermission(permissionOrUser as UserContext | null, ownership)
+      : (permissionOrUser as Permission);
   return permission !== "none";
 }
 
-export function canWrite(permission: Permission): boolean {
+export function canWrite(permission: Permission): boolean;
+export function canWrite(user: UserContext | null, ownership: DiagramOwnership): boolean;
+export function canWrite(
+  permissionOrUser: Permission | UserContext | null,
+  ownership?: DiagramOwnership
+): boolean {
+  const permission =
+    ownership !== undefined
+      ? getEffectivePermission(permissionOrUser as UserContext | null, ownership)
+      : (permissionOrUser as Permission);
   return permission === "owner" || permission === "editor";
 }
 
-export function canDelete(permission: Permission): boolean {
+export function canDelete(permission: Permission): boolean;
+export function canDelete(user: UserContext | null, ownership: DiagramOwnership): boolean;
+export function canDelete(
+  permissionOrUser: Permission | UserContext | null,
+  ownership?: DiagramOwnership
+): boolean {
+  const permission =
+    ownership !== undefined
+      ? getEffectivePermission(permissionOrUser as UserContext | null, ownership)
+      : (permissionOrUser as Permission);
   return permission === "owner";
 }
 
-export function canShare(permission: Permission): boolean {
+export function canShare(permission: Permission): boolean;
+export function canShare(user: UserContext | null, ownership: DiagramOwnership): boolean;
+export function canShare(
+  permissionOrUser: Permission | UserContext | null,
+  ownership?: DiagramOwnership
+): boolean {
+  const permission =
+    ownership !== undefined
+      ? getEffectivePermission(permissionOrUser as UserContext | null, ownership)
+      : (permissionOrUser as Permission);
   return permission === "owner";
 }
 
-export function canExport(permission: Permission): boolean {
+export function canExport(permission: Permission): boolean;
+export function canExport(user: UserContext | null, ownership: DiagramOwnership): boolean;
+export function canExport(
+  permissionOrUser: Permission | UserContext | null,
+  ownership?: DiagramOwnership
+): boolean {
+  const permission =
+    ownership !== undefined
+      ? getEffectivePermission(permissionOrUser as UserContext | null, ownership)
+      : (permissionOrUser as Permission);
   return permission !== "none";
 }
 
@@ -124,13 +174,50 @@ export function createOwnership(userId: string | null, isPublic = false): Diagra
 }
 
 /**
- * Parse ownership data from database JSON
+ * Parse ownership data from database JSON or extract from a Diagram object
+ *
+ * Supports two calling conventions:
+ * 1. parseOwnership(ownerId, isPublic, sharesJson) - Parse from raw database values
+ * 2. parseOwnership(diagram) - Extract from a Diagram object
  */
 export function parseOwnership(
   ownerId: string | null,
   isPublic: number | boolean,
   sharesJson: string | null
+): DiagramOwnership;
+export function parseOwnership(diagram: Diagram): DiagramOwnership;
+export function parseOwnership(
+  ownerIdOrDiagram: string | null | Diagram,
+  isPublic?: number | boolean,
+  sharesJson?: string | null
 ): DiagramOwnership {
+  // If first argument is a Diagram object
+  if (
+    ownerIdOrDiagram !== null &&
+    typeof ownerIdOrDiagram === "object" &&
+    "id" in ownerIdOrDiagram &&
+    "spec" in ownerIdOrDiagram
+  ) {
+    const diagram = ownerIdOrDiagram as Diagram;
+    const shares = new Map<string, "editor" | "viewer">();
+
+    if (diagram.shares) {
+      for (const share of diagram.shares) {
+        if (share.permission === "editor" || share.permission === "viewer") {
+          shares.set(share.userId, share.permission);
+        }
+      }
+    }
+
+    return {
+      ownerId: diagram.ownerId ?? null,
+      isPublic: diagram.isPublic ?? false,
+      shares,
+    };
+  }
+
+  // Original implementation for raw database values
+  const ownerId = ownerIdOrDiagram as string | null;
   const shares = new Map<string, "editor" | "viewer">();
 
   if (sharesJson) {
@@ -168,18 +255,27 @@ export function serializeShares(shares: Map<string, "editor" | "viewer">): strin
 
 /**
  * Error class for permission denied
+ *
+ * Supports two calling conventions:
+ * 1. new PermissionDeniedError(action, resourceType, resourceId)
+ * 2. new PermissionDeniedError(action, resourceId) - Assumes resourceType is "diagram"
  */
 export class PermissionDeniedError extends Error {
   code = "PERMISSION_DENIED" as const;
   statusCode = 403 as const;
+  action: string;
+  resourceType: string;
+  resourceId: string;
 
-  constructor(
-    public action: string,
-    public resourceType: string,
-    public resourceId: string
-  ) {
-    super(`Permission denied: cannot ${action} ${resourceType} ${resourceId}`);
+  constructor(action: string, resourceTypeOrId: string, resourceId?: string) {
+    const actualResourceType = resourceId !== undefined ? resourceTypeOrId : "diagram";
+    const actualResourceId = resourceId !== undefined ? resourceId : resourceTypeOrId;
+
+    super(`Permission denied: cannot ${action} ${actualResourceType} ${actualResourceId}`);
     this.name = "PermissionDeniedError";
+    this.action = action;
+    this.resourceType = actualResourceType;
+    this.resourceId = actualResourceId;
   }
 }
 
