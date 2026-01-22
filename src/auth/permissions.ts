@@ -20,6 +20,13 @@ export interface DiagramOwnership {
 
 /**
  * Calculate effective permission for a user on a diagram
+ *
+ * Permission hierarchy:
+ * - Admin users have full access (owner permission)
+ * - Owners get owner permission, but viewer-role users are restricted
+ * - Explicit shares grant editor/viewer permission
+ * - Anonymous-owned public diagrams are editable by authenticated users
+ * - Public diagrams are viewable by anyone
  */
 export function getEffectivePermission(
   user: UserContext | null,
@@ -30,8 +37,13 @@ export function getEffectivePermission(
     return "owner";
   }
 
-  // Owner has full control
+  // Owner has full control (unless they have viewer role)
   if (user && ownership.ownerId === user.id) {
+    // Viewer role users have restricted permissions even on their own diagrams
+    // They can read and export but cannot write or delete
+    if (user.role === "viewer") {
+      return "viewer";
+    }
     return "owner";
   }
 
@@ -41,6 +53,12 @@ export function getEffectivePermission(
     if (sharePermission) {
       return sharePermission;
     }
+  }
+
+  // Anonymous-owned public diagrams are editable by any authenticated user
+  // This allows collaborative editing of orphaned diagrams
+  if (ownership.ownerId === null && ownership.isPublic && user) {
+    return "editor";
   }
 
   // Public diagrams are viewable by anyone
