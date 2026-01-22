@@ -7,10 +7,22 @@
 
 import type { DiagramSpec } from "../types";
 import { createLogger } from "../logging";
+import { safeParseSpec } from "../validation/schemas";
 
 const log = createLogger("compression");
 
 const COMPRESSION_THRESHOLD = 10 * 1024; // 10KB - compress specs larger than this
+
+/** Maximum allowed decompressed size (50MB) - prevents decompression bomb attacks */
+const MAX_DECOMPRESSED_SIZE = 50 * 1024 * 1024;
+
+/** Error thrown when decompressed data exceeds size limit */
+export class DecompressionLimitError extends Error {
+  constructor(size: number, limit: number) {
+    super(`Decompressed data exceeds limit: ${size} bytes > ${limit} bytes`);
+    this.name = "DecompressionLimitError";
+  }
+}
 
 /**
  * Compress a diagram spec if it exceeds threshold
@@ -72,14 +84,29 @@ export async function compressSpec(spec: DiagramSpec): Promise<string> {
 
 /**
  * Decompress a spec string (handles both compressed and uncompressed)
+ *
+ * Security features:
+ * - Size limit prevents decompression bomb attacks
+ * - Schema validation ensures result is a valid DiagramSpec
  */
 export async function decompressSpec(data: string): Promise<DiagramSpec> {
+  // Handle uncompressed JSON
   if (!data.startsWith("gz:")) {
-    return JSON.parse(data);
+    const result = safeParseSpec(data, "decompressSpec:uncompressed");
+    if (!result.valid) {
+      log.warn("Decompressed spec failed validation", { errors: result.errors.slice(0, 3) });
+    }
+    return result.spec;
   }
 
   try {
     const base64 = data.slice(3);
+
+    // Validate base64 format before decoding
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+      throw new Error("Invalid base64 encoding");
+    }
+
     const binaryString = atob(base64);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
@@ -94,15 +121,24 @@ export async function decompressSpec(data: string): Promise<DiagramSpec> {
 
     const decompressedChunks: Uint8Array[] = [];
     const reader = ds.readable.getReader();
+    let totalLength = 0;
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+
+      // Check size limit during decompression (early abort for bombs)
+      totalLength += value.length;
+      if (totalLength > MAX_DECOMPRESSED_SIZE) {
+        // Cancel the stream to stop decompression
+        await reader.cancel();
+        throw new DecompressionLimitError(totalLength, MAX_DECOMPRESSED_SIZE);
+      }
+
       decompressedChunks.push(value);
     }
 
     // Combine chunks
-    const totalLength = decompressedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
     const decompressed = new Uint8Array(totalLength);
     let offset = 0;
     for (const chunk of decompressedChunks) {
@@ -112,8 +148,18 @@ export async function decompressSpec(data: string): Promise<DiagramSpec> {
 
     const decoder = new TextDecoder();
     const json = decoder.decode(decompressed);
-    return JSON.parse(json);
+
+    // Validate against schema
+    const result = safeParseSpec(json, "decompressSpec:compressed");
+    if (!result.valid) {
+      log.warn("Decompressed spec failed validation", { errors: result.errors.slice(0, 3) });
+    }
+    return result.spec;
   } catch (err) {
+    // Re-throw DecompressionLimitError without wrapping
+    if (err instanceof DecompressionLimitError) {
+      throw err;
+    }
     log.error("Decompression failed", { error: err instanceof Error ? err.message : String(err) });
     throw new Error("Failed to decompress diagram spec");
   }
