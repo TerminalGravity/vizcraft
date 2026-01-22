@@ -64,6 +64,10 @@ export const RATE_LIMITS = {
 interface RateLimitState {
   requests: number[];
   windowStart: number;
+  /** Last access timestamp for LRU eviction */
+  lastAccess: number;
+  /** Creation timestamp for absolute TTL */
+  createdAt: number;
 }
 
 // In-memory store for rate limit state
@@ -73,43 +77,66 @@ const rateLimitStore = new Map<string, RateLimitState>();
 // Cleanup configuration
 const CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const MAX_STORE_SIZE = 100_000; // Maximum entries to prevent memory exhaustion
+const ABSOLUTE_TTL = 60 * 60 * 1000; // 1 hour absolute TTL for any entry
+const EVICTION_BATCH_SIZE = 100; // Number of entries to evict when at capacity
 let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 let lastCleanupTime = Date.now();
 
 /**
+ * Evict entries using LRU (Least Recently Used) policy
+ * Called when store approaches capacity
+ */
+function evictLRUEntries(count: number): number {
+  if (rateLimitStore.size === 0 || count <= 0) return 0;
+
+  // Sort by lastAccess (oldest first) for LRU eviction
+  const entries = Array.from(rateLimitStore.entries())
+    .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+
+  const toEvict = Math.min(count, entries.length);
+  for (let i = 0; i < toEvict; i++) {
+    const entry = entries[i];
+    if (entry) {
+      rateLimitStore.delete(entry[0]);
+    }
+  }
+
+  return toEvict;
+}
+
+/**
  * Perform cleanup of stale rate limit entries
- * Wrapped in try-catch to prevent interval failures
+ * Uses TTL-based cleanup and LRU eviction for memory management
  */
 function performCleanup(): void {
   try {
     const now = Date.now();
     let deleted = 0;
 
+    // Pass 1: Remove entries that have exceeded absolute TTL or are stale
     for (const [key, state] of rateLimitStore.entries()) {
-      // Remove if no requests in the last 2 windows
-      if (now - state.windowStart > CLEANUP_INTERVAL) {
+      const entryAge = now - state.createdAt;
+      const timeSinceAccess = now - state.lastAccess;
+
+      // Remove if:
+      // 1. Entry has exceeded absolute TTL (1 hour)
+      // 2. Entry hasn't been accessed in 2x cleanup interval (stale)
+      if (entryAge > ABSOLUTE_TTL || timeSinceAccess > CLEANUP_INTERVAL * 2) {
         rateLimitStore.delete(key);
         deleted++;
       }
     }
 
-    // Emergency cleanup if store is too large
+    // Pass 2: LRU eviction if still over capacity
     if (rateLimitStore.size > MAX_STORE_SIZE) {
-      log.warn("Store size exceeds maximum, performing emergency cleanup", {
+      log.warn("Store size exceeds maximum after TTL cleanup, performing LRU eviction", {
         currentSize: rateLimitStore.size,
         maxSize: MAX_STORE_SIZE,
       });
-      // Delete oldest 20% of entries
-      const entries = Array.from(rateLimitStore.entries())
-        .sort((a, b) => a[1].windowStart - b[1].windowStart);
-      const toDelete = Math.floor(entries.length * 0.2);
-      for (let i = 0; i < toDelete; i++) {
-        const entry = entries[i];
-        if (entry) {
-          rateLimitStore.delete(entry[0]);
-          deleted++;
-        }
-      }
+      // Evict least recently used entries to get below 90% capacity
+      const targetSize = Math.floor(MAX_STORE_SIZE * 0.9);
+      const toEvict = rateLimitStore.size - targetSize;
+      deleted += evictLRUEntries(toEvict);
     }
 
     lastCleanupTime = now;
@@ -161,6 +188,7 @@ function getClientKey(c: Context): string {
 
 /**
  * Check if request is rate limited using sliding window algorithm
+ * Includes LRU tracking for efficient memory management
  */
 function isRateLimited(key: string, config: RateLimitConfig): {
   limited: boolean;
@@ -173,8 +201,21 @@ function isRateLimited(key: string, config: RateLimitConfig): {
   // Get or create state
   let state = rateLimitStore.get(key);
   if (!state) {
-    state = { requests: [], windowStart: now };
+    // Proactive eviction: if at capacity, evict before inserting
+    if (rateLimitStore.size >= MAX_STORE_SIZE) {
+      evictLRUEntries(EVICTION_BATCH_SIZE);
+    }
+
+    state = {
+      requests: [],
+      windowStart: now,
+      lastAccess: now,
+      createdAt: now,
+    };
     rateLimitStore.set(key, state);
+  } else {
+    // Update last access time for LRU tracking
+    state.lastAccess = now;
   }
 
   // Remove requests outside the current window
@@ -304,11 +345,15 @@ export function getRateLimiterStats(): {
   maxSize: number;
   lastCleanupTime: number;
   cleanupRunning: boolean;
+  absoluteTtlMs: number;
+  evictionBatchSize: number;
 } {
   return {
     storeSize: rateLimitStore.size,
     maxSize: MAX_STORE_SIZE,
     lastCleanupTime,
     cleanupRunning: cleanupIntervalId !== null,
+    absoluteTtlMs: ABSOLUTE_TTL,
+    evictionBatchSize: EVICTION_BATCH_SIZE,
   };
 }
