@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { Tldraw, createTLStore, defaultShapeUtils } from "tldraw";
+import { jsPDF } from "jspdf";
 import "tldraw/tldraw.css";
 import "./styles.css";
 
@@ -272,6 +273,9 @@ function Panel({
           <button className="btn btn-secondary" onClick={() => onExport("svg")}>
             <Icons.Download /> Export SVG
           </button>
+          <button className="btn btn-secondary" onClick={() => onExport("pdf")}>
+            <Icons.Download /> Export PDF
+          </button>
         </div>
       </div>
 
@@ -513,7 +517,41 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
           }
         }
       } else if (format === "pdf") {
-        alert("PDF export coming soon!");
+        // Export as PDF using jsPDF
+        const svg = await editor.getSvg([...shapeIds], {
+          padding: 32,
+          background: true,
+          scale: 2,
+        });
+
+        if (svg) {
+          const svgString = new XMLSerializer().serializeToString(svg);
+          const pngBlob = await svgToPngBlob(svgString);
+
+          if (pngBlob) {
+            // Convert blob to data URL
+            const reader = new FileReader();
+            reader.onload = () => {
+              const imgData = reader.result as string;
+
+              // Create PDF with appropriate orientation
+              const img = new Image();
+              img.onload = () => {
+                const isLandscape = img.width > img.height;
+                const pdf = new jsPDF({
+                  orientation: isLandscape ? "landscape" : "portrait",
+                  unit: "px",
+                  format: [img.width, img.height],
+                });
+
+                pdf.addImage(imgData, "PNG", 0, 0, img.width, img.height);
+                pdf.save(`${selectedDiagram.name}.pdf`);
+              };
+              img.src = imgData;
+            };
+            reader.readAsDataURL(pngBlob);
+          }
+        }
       }
     } catch (err) {
       console.error("Export failed:", err);

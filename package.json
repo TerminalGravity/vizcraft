@@ -24,6 +24,7 @@
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@tldraw/tldraw": "^4.3.0",
     "hono": "^4.11.5",
+    "jspdf": "^4.0.0",
     "nanoid": "^5.1.6",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

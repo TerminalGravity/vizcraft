@@ -333,8 +333,13 @@ server.tool(
             type: "text",
             text: JSON.stringify({
               success: false,
-              message: "PDF export coming soon",
-              svgAlternative: "Use format: 'svg' and convert to PDF externally",
+              message: "PDF export requires browser rendering (uses jsPDF)",
+              instructions: [
+                `1. Open ${WEB_URL}/diagram/${id}`,
+                "2. Click 'Export PDF' button in the panel",
+              ],
+              webUrl: `${WEB_URL}/diagram/${id}`,
+              svgAlternative: "Use format: 'svg' for server-side export",
             }),
           },
         ],
