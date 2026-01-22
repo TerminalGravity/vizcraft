@@ -438,6 +438,49 @@ function App() {
     }
   }, [notification]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.metaKey || e.ctrlKey;
+
+      // Cmd/Ctrl + S: Save (copy spec)
+      if (isMod && e.key === "s") {
+        e.preventDefault();
+        if (selectedDiagram) {
+          handleCopySpec();
+          setNotification({ type: "success", message: "Spec copied to clipboard" });
+        }
+      }
+
+      // Cmd/Ctrl + E: Export PNG
+      if (isMod && e.key === "e") {
+        e.preventDefault();
+        if (selectedDiagram) {
+          handleExport("png");
+        }
+      }
+
+      // Cmd/Ctrl + N: New diagram
+      if (isMod && e.key === "n") {
+        e.preventDefault();
+        handleNewDiagram();
+      }
+
+      // Cmd/Ctrl + /: Show shortcuts help
+      if (isMod && e.key === "/") {
+        e.preventDefault();
+        alert(`Keyboard Shortcuts:
+⌘/Ctrl + N: New diagram
+⌘/Ctrl + S: Copy spec to clipboard
+⌘/Ctrl + E: Export as PNG
+⌘/Ctrl + /: Show this help`);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedDiagram]);
+
   const loadAgents = async () => {
     try {
       const data = await api.listAgents();
