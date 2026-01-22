@@ -41,3 +41,4 @@ data/diagrams/*
 !data/exports/.gitkeep
 !data/diagrams/.gitkeep
 !data/agents/.gitkeep
+.playwright-mcp/
