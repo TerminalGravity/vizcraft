@@ -1,0 +1,11 @@
+name: "Colorful Theme"
+description: "Apply vibrant colors to make the diagram visually striking"
+type: "preset"
+styles:
+  node_fill: "#7c3aed"
+  node_stroke: "#a78bfa"
+  node_text: "#ffffff"
+  edge_color: "#f472b6"
+  background: "#1e1b4b"
+  accent_1: "#22d3ee"
+  accent_2: "#a3e635"

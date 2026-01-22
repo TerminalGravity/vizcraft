@@ -1,0 +1,12 @@
+name: "Simplify"
+description: "Reduce diagram complexity by merging similar nodes and removing clutter"
+type: "llm"
+provider: "anthropic"
+prompt: |
+  Analyze this diagram and suggest simplifications:
+  - Identify nodes that could be merged
+  - Find redundant edges
+  - Suggest groupings for related nodes
+  - Remove unnecessary details
+
+  Maintain the core meaning while reducing visual complexity.

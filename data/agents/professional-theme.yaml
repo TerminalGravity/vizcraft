@@ -1,0 +1,10 @@
+name: "Professional Theme"
+description: "Apply a clean, professional color scheme to the diagram"
+type: "preset"
+styles:
+  node_fill: "#1e293b"
+  node_stroke: "#3b82f6"
+  node_text: "#f1f5f9"
+  edge_color: "#64748b"
+  background: "#0f172a"
+  font_family: "Inter, system-ui, sans-serif"

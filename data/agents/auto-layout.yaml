@@ -1,0 +1,6 @@
+name: "Auto Layout"
+description: "Automatically arrange nodes using dagre graph layout algorithm"
+type: "rule-based"
+actions:
+  - dagre_layout
+  - snap_to_grid

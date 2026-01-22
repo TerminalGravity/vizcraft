@@ -1,0 +1,11 @@
+name: "Annotate"
+description: "Add helpful annotations and explanations to diagram elements"
+type: "llm"
+provider: "anthropic"
+prompt: |
+  Analyze this diagram and add helpful annotations:
+  - Add descriptive labels to edges that lack them
+  - Add brief tooltips/details to nodes explaining their purpose
+  - Identify potential issues or improvements
+
+  Be concise and technical. Focus on clarity.

@@ -6,6 +6,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { storage } from "./storage/db";
+import { loadAgents, getAgent } from "./agents/loader";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -73,6 +74,29 @@ app.get("/api/diagrams/:id/versions", (c) => {
 
 // List projects
 app.get("/api/projects", (c) => c.json({ projects: storage.listProjects() }));
+
+// List agents
+app.get("/api/agents", async (c) => {
+  const refresh = c.req.query("refresh") === "true";
+  const agents = await loadAgents(refresh);
+  return c.json({
+    count: agents.length,
+    agents: agents.map((a) => ({
+      id: a.id,
+      name: a.name,
+      description: a.description,
+      type: a.type,
+    })),
+  });
+});
+
+// Get specific agent
+app.get("/api/agents/:id", async (c) => {
+  const id = c.req.param("id");
+  const agent = await getAgent(id);
+  if (!agent) return c.json({ error: "Agent not found" }, 404);
+  return c.json(agent);
+});
 
 // Export diagram as SVG (server-side generation)
 app.get("/api/diagrams/:id/export/svg", (c) => {
