@@ -449,3 +449,25 @@ body {
 .agent-btn:disabled:hover {
   background: var(--bg-secondary);
 }
+
+/* Light theme */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f1f5f9;
+  --bg-tertiary: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --border: #cbd5e1;
+}
+
+/* Theme toggle button */
+.theme-toggle {
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: var(--accent);
+}

@@ -132,6 +132,19 @@ const Icons = {
       <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
     </svg>
   ),
+  Sun: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+      <circle cx="12" cy="12" r="5" />
+      <line x1="12" y1="1" x2="12" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="23" />
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+      <line x1="1" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="12" x2="23" y2="12" />
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    </svg>
+  ),
 };
 
 // Agent type from API
@@ -420,9 +433,28 @@ function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [runningAgent, setRunningAgent] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    // Check localStorage and system preference
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("vizcraft-theme") as "dark" | "light" | null;
+      if (saved) return saved;
+      if (window.matchMedia("(prefers-color-scheme: light)").matches) return "light";
+    }
+    return "dark";
+  });
   const editorRef = useRef<any>(null);
 
   const selectedDiagram = diagrams.find((d) => d.id === selectedId) || null;
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("vizcraft-theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((t) => (t === "dark" ? "light" : "dark"));
+  };
 
   // Load diagrams and agents on mount
   useEffect(() => {
@@ -764,8 +796,8 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
           <button className="btn btn-ghost btn-icon" onClick={loadDiagrams} title="Refresh">
             <Icons.Refresh />
           </button>
-          <button className="btn btn-ghost btn-icon" title="Toggle theme">
-            <Icons.Moon />
+          <button className="btn btn-ghost btn-icon theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+            {theme === "dark" ? <Icons.Moon /> : <Icons.Sun />}
           </button>
         </div>
       </header>
