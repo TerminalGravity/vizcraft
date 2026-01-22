@@ -159,6 +159,11 @@ db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_owner ON diagrams(owner_id)`);
 // Composite index for owner + updated_at for listing user's diagrams
 db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_owner_updated ON diagrams(owner_id, updated_at DESC)`);
 
+// Composite index for owner + public + updated_at for anonymous/public access queries
+// Optimizes: WHERE owner_id = ? AND is_public = 1 ORDER BY updated_at DESC
+// Also covers: WHERE owner_id IS NULL AND is_public = 1 (public diagrams)
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_owner_public ON diagrams(owner_id, is_public, updated_at DESC)`);
+
 // Expression index for diagram type filtering
 // Enables efficient queries like: WHERE json_extract(spec, '$.type') IN ('flowchart', 'architecture')
 // Without this, SQLite performs a full table scan extracting JSON from every row
