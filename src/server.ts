@@ -12,6 +12,7 @@ import { protectedStorage as storage } from "./storage/protected-storage";
 import type { DiagramSpec, DiagramChange } from "./types";
 import { sanitizeFilename, createSafeExportPath, validateExportPath } from "./utils/path-safety";
 import { createLogger } from "./logging";
+import { config } from "./config";
 
 const log = createLogger("mcp");
 
@@ -63,8 +64,47 @@ function createErrorResponse(
 }
 
 /**
+ * Map of error codes to user-friendly messages (safe for production)
+ */
+const ERROR_MESSAGES: Record<string, { message: string; devSuggestion?: string }> = {
+  CONNECTION_REFUSED: {
+    message: "Unable to connect to the required service",
+    devSuggestion: "Ensure the web server is running with: bun run web:dev",
+  },
+  FILE_NOT_FOUND: {
+    message: "The requested file could not be found",
+    devSuggestion: "Check that the file path exists and is accessible",
+  },
+  DATABASE_ERROR: {
+    message: "A database operation failed",
+    devSuggestion: "Database may be locked or corrupted. Try restarting the server.",
+  },
+  TIMEOUT: {
+    message: "The operation timed out",
+    devSuggestion: "Try with smaller data or check server load",
+  },
+  TOOL_ERROR: {
+    message: "The tool encountered an error",
+  },
+};
+
+/**
+ * Classify an error into a known error code
+ */
+function classifyError(errorMessage: string): string {
+  if (errorMessage.includes("ECONNREFUSED")) return "CONNECTION_REFUSED";
+  if (errorMessage.includes("ENOENT")) return "FILE_NOT_FOUND";
+  if (errorMessage.includes("database") || errorMessage.includes("SQLITE")) return "DATABASE_ERROR";
+  if (errorMessage.includes("timeout") || errorMessage.includes("ETIMEDOUT")) return "TIMEOUT";
+  return "TOOL_ERROR";
+}
+
+/**
  * Wrap a tool handler with error boundary
  * Catches all exceptions and returns structured error responses
+ *
+ * Security: In production, error messages are sanitized to prevent information disclosure.
+ * Detailed error messages and suggestions are only shown in development mode.
  */
 function withErrorBoundary<TArgs, TResult extends MCPToolResult>(
   toolName: string,
@@ -78,31 +118,22 @@ function withErrorBoundary<TArgs, TResult extends MCPToolResult>(
       const duration = Date.now() - startTime;
       const errorMessage = err instanceof Error ? err.message : String(err);
 
+      // Always log full error details for debugging
       log.error("Tool failed", { toolName, durationMs: duration, error: errorMessage });
 
-      // Provide helpful suggestions based on error type
-      let suggestion: string | undefined;
-      let code = "TOOL_ERROR";
+      // Classify the error
+      const code = classifyError(errorMessage);
+      // ERROR_MESSAGES always has TOOL_ERROR as fallback
+      const errorInfo = ERROR_MESSAGES[code] ?? ERROR_MESSAGES.TOOL_ERROR!;
 
-      if (errorMessage.includes("ECONNREFUSED")) {
-        code = "CONNECTION_REFUSED";
-        suggestion = "Ensure the web server is running with: bun run web:dev";
-      } else if (errorMessage.includes("ENOENT")) {
-        code = "FILE_NOT_FOUND";
-        suggestion = "Check that the file path exists and is accessible";
-      } else if (errorMessage.includes("database")) {
-        code = "DATABASE_ERROR";
-        suggestion = "Database may be locked or corrupted. Try restarting the server.";
-      } else if (errorMessage.includes("timeout")) {
-        code = "TIMEOUT";
-        suggestion = "Operation took too long. Try with smaller data or check server load.";
-      }
+      // In production, use sanitized messages; in development, include details
+      const userMessage = config.isDevelopment
+        ? `Tool "${toolName}" failed: ${errorMessage}`
+        : `Tool "${toolName}" failed: ${errorInfo.message}`;
 
-      return createErrorResponse(
-        `Tool "${toolName}" failed: ${errorMessage}`,
-        code,
-        suggestion
-      );
+      const suggestion = config.isDevelopment ? errorInfo.devSuggestion : undefined;
+
+      return createErrorResponse(userMessage, code, suggestion);
     }
   };
 }
