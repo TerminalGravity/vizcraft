@@ -66,6 +66,18 @@ const api = {
   async deleteDiagram(id: string): Promise<void> {
     await fetch(`${API_URL}/diagrams/${id}`, { method: "DELETE" });
   },
+
+  async listAgents(): Promise<{ agents: Agent[] }> {
+    const res = await fetch(`${API_URL}/agents`);
+    return res.json();
+  },
+
+  async runAgent(diagramId: string, agentId: string): Promise<{ success: boolean; error?: string; changes?: string[] }> {
+    const res = await fetch(`${API_URL}/diagrams/${diagramId}/run-agent/${agentId}`, {
+      method: "POST",
+    });
+    return res.json();
+  },
 };
 
 // Icons
@@ -122,17 +134,42 @@ const Icons = {
   ),
 };
 
+// Agent type from API
+interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  type: "rule-based" | "preset" | "llm";
+}
+
+// Agent icons by type/name
+const getAgentIcon = (agent: Agent): string => {
+  if (agent.name.toLowerCase().includes("layout")) return "⚡";
+  if (agent.name.toLowerCase().includes("theme") || agent.name.toLowerCase().includes("style")) return "🎨";
+  if (agent.name.toLowerCase().includes("annotate")) return "📝";
+  if (agent.name.toLowerCase().includes("simplify")) return "✂️";
+  if (agent.type === "llm") return "🤖";
+  if (agent.type === "preset") return "🎨";
+  return "⚙️";
+};
+
 // Sidebar component
 function Sidebar({
   projects,
   selectedDiagram,
   onSelectDiagram,
   onNewDiagram,
+  agents,
+  onRunAgent,
+  runningAgent,
 }: {
   projects: Project[];
   selectedDiagram: string | null;
   onSelectDiagram: (id: string) => void;
   onNewDiagram: () => void;
+  agents: Agent[];
+  onRunAgent: (agentId: string) => void;
+  runningAgent: string | null;
 }) {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set(["default"]));
 
@@ -189,34 +226,29 @@ function Sidebar({
       <div className="sidebar-section" style={{ flex: 1 }}>
         <span className="sidebar-title">Agents</span>
         <div className="agent-list">
-          <button className="agent-btn">
-            <span className="agent-icon">⚡</span>
-            <span className="agent-info">
-              <span className="agent-name">Auto Layout</span>
-              <span className="agent-desc">Arrange nodes for clarity</span>
-            </span>
-          </button>
-          <button className="agent-btn">
-            <span className="agent-icon">🎨</span>
-            <span className="agent-info">
-              <span className="agent-name">Style Theme</span>
-              <span className="agent-desc">Apply professional theme</span>
-            </span>
-          </button>
-          <button className="agent-btn">
-            <span className="agent-icon">📝</span>
-            <span className="agent-info">
-              <span className="agent-name">Annotate</span>
-              <span className="agent-desc">Add helpful annotations</span>
-            </span>
-          </button>
-          <button className="agent-btn">
-            <span className="agent-icon">✂️</span>
-            <span className="agent-info">
-              <span className="agent-name">Simplify</span>
-              <span className="agent-desc">Reduce complexity</span>
-            </span>
-          </button>
+          {agents.length === 0 ? (
+            <div style={{ color: "var(--text-muted)", fontSize: "0.875rem", padding: "0.5rem" }}>
+              No agents loaded
+            </div>
+          ) : (
+            agents.map((agent) => (
+              <button
+                key={agent.id}
+                className={`agent-btn ${runningAgent === agent.id ? "running" : ""}`}
+                onClick={() => onRunAgent(agent.id)}
+                disabled={!selectedDiagram || runningAgent !== null}
+                title={!selectedDiagram ? "Select a diagram first" : `Run ${agent.name}`}
+              >
+                <span className="agent-icon">
+                  {runningAgent === agent.id ? "⏳" : getAgentIcon(agent)}
+                </span>
+                <span className="agent-info">
+                  <span className="agent-name">{agent.name}</span>
+                  <span className="agent-desc">{agent.description || agent.type}</span>
+                </span>
+              </button>
+            ))
+          )}
         </div>
       </div>
     </aside>
@@ -385,14 +417,65 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [runningAgent, setRunningAgent] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const editorRef = useRef<any>(null);
 
   const selectedDiagram = diagrams.find((d) => d.id === selectedId) || null;
 
-  // Load diagrams on mount
+  // Load diagrams and agents on mount
   useEffect(() => {
     loadDiagrams();
+    loadAgents();
   }, []);
+
+  // Auto-hide notifications
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  const loadAgents = async () => {
+    try {
+      const data = await api.listAgents();
+      setAgents(data.agents);
+    } catch (err) {
+      console.error("Failed to load agents:", err);
+    }
+  };
+
+  const handleRunAgent = async (agentId: string) => {
+    if (!selectedId) return;
+
+    setRunningAgent(agentId);
+    try {
+      const result = await api.runAgent(selectedId, agentId);
+
+      if (result.success) {
+        // Reload the diagram to get updated spec
+        await loadDiagrams();
+        setNotification({
+          type: "success",
+          message: `Agent completed: ${result.changes?.join(", ") || "Done"}`,
+        });
+      } else {
+        setNotification({
+          type: "error",
+          message: result.error || "Agent failed",
+        });
+      }
+    } catch (err) {
+      setNotification({
+        type: "error",
+        message: `Agent error: ${err}`,
+      });
+    } finally {
+      setRunningAgent(null);
+    }
+  };
 
   const loadDiagrams = async () => {
     try {
@@ -622,6 +705,13 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
 
   return (
     <div className="app">
+      {/* Notification toast */}
+      {notification && (
+        <div className={`toast toast-${notification.type}`}>
+          {notification.type === "success" ? "✓" : "✕"} {notification.message}
+        </div>
+      )}
+
       <header className="header">
         <div className="header-logo">
           <Icons.Logo />
@@ -643,6 +733,9 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
           selectedDiagram={selectedId}
           onSelectDiagram={setSelectedId}
           onNewDiagram={handleNewDiagram}
+          agents={agents}
+          onRunAgent={handleRunAgent}
+          runningAgent={runningAgent}
         />
 
         <div className="canvas-container">
