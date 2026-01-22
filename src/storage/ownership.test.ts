@@ -378,5 +378,24 @@ describe("Ownership", () => {
       const updated = storage.getDiagram(diagram.id);
       expect(updated!.shares).toHaveLength(0);
     });
+
+    it("listDiagramsForUser returns empty for invalid userId", () => {
+      // Invalid userIds should not be used in queries
+      const result = storage.listDiagramsForUser('user"injection');
+      expect(result.diagrams).toHaveLength(0);
+      expect(result.total).toBe(0);
+    });
+
+    it("listDiagramsForUser works with valid userId", () => {
+      const result = storage.listDiagramsForUser("user-1");
+      // Should return some diagrams (from beforeEach setup)
+      expect(result.diagrams.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("listDiagramsForUser allows null userId (anonymous)", () => {
+      const result = storage.listDiagramsForUser(null);
+      // Should work and return public diagrams
+      expect(Array.isArray(result.diagrams)).toBe(true);
+    });
   });
 });

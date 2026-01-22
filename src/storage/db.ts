@@ -1033,6 +1033,13 @@ export const storage = {
   ): { diagrams: Diagram[]; total: number } {
     const { project, limit = 50, offset = 0 } = options;
 
+    // Validate userId if provided (defense in depth)
+    // This prevents LIKE pattern injection even though the query is parameterized
+    if (userId !== null && !this.validateUserId(userId)) {
+      console.error(`[db] Invalid userId for listDiagramsForUser: ${userId?.slice(0, 50)}`);
+      return { diagrams: [], total: 0 };
+    }
+
     // Build WHERE clause based on access:
     // - User owns the diagram
     // - Diagram is public
