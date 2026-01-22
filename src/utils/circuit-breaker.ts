@@ -276,6 +276,21 @@ export const circuitBreakers = {
     resetTimeout: 60_000,
     monitorWindow: 120_000,
   }),
+
+  /**
+   * Circuit breaker for database operations
+   * More tolerant since SQLite is local, but protects against:
+   * - Disk full conditions
+   * - File locking issues
+   * - WAL checkpoint failures
+   */
+  database: new CircuitBreaker({
+    name: "database",
+    failureThreshold: 10, // Higher threshold - local DB should be reliable
+    successThreshold: 3,
+    resetTimeout: 10_000, // Shorter reset - local recovery is fast
+    monitorWindow: 30_000,
+  }),
 };
 
 /**
