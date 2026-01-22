@@ -75,6 +75,7 @@ import {
   validationErrorResponse,
   operationResponse,
 } from "./api/responses";
+import { ApiError, errorFromCode } from "./api/error-codes";
 import {
   optionalAuth,
   requireAuth,
@@ -235,21 +236,20 @@ app.onError((err, c) => {
   }
 
   if (err instanceof SyntaxError) {
-    return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
+    return errorFromCode(c, ApiError.INVALID_JSON);
   }
 
   const details = process.env.NODE_ENV === "development" ? err.message : undefined;
-  return errorResponse(c, "INTERNAL_ERROR", "Internal server error", 500, details);
+  return errorFromCode(c, ApiError.INTERNAL_ERROR, undefined, details);
 });
 
 // 404 handler for API routes
 app.notFound((c) => {
   if (c.req.path.startsWith("/api")) {
-    return errorResponse(
+    return errorFromCode(
       c,
-      "NOT_FOUND",
-      `API endpoint not found: ${c.req.method} ${c.req.path}`,
-      404
+      ApiError.NOT_FOUND,
+      `API endpoint not found: ${c.req.method} ${c.req.path}`
     );
   }
   return c.text("Not Found", 404);
@@ -295,11 +295,10 @@ app.get("/metrics", (c) => {
 app.post("/api/auth/token", smallBodyLimit, async (c) => {
   // Only allow in non-production environments
   if (process.env.NODE_ENV === "production") {
-    return errorResponse(
+    return errorFromCode(
       c,
-      "FORBIDDEN",
-      "Token generation endpoint is disabled in production",
-      403
+      ApiError.FORBIDDEN,
+      "Token generation endpoint is disabled in production"
     );
   }
 
@@ -674,9 +673,9 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
   } catch (err) {
     console.error("POST /api/diagrams error:", err);
     if (err instanceof SyntaxError) {
-      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
+      return errorFromCode(c, ApiError.INVALID_JSON);
     }
-    return errorResponse(c, "CREATE_FAILED", "Failed to create diagram", 500);
+    return errorFromCode(c, ApiError.CREATE_FAILED);
   }
 });
 
@@ -775,9 +774,9 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
     console.error("PUT /api/diagrams/:id error:", err);
     if (err instanceof PermissionDeniedError) throw err;
     if (err instanceof SyntaxError) {
-      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
+      return errorFromCode(c, ApiError.INVALID_JSON);
     }
-    return errorResponse(c, "UPDATE_FAILED", "Failed to update diagram", 500);
+    return errorFromCode(c, ApiError.UPDATE_FAILED);
   }
 });
 
@@ -820,7 +819,7 @@ app.delete("/api/diagrams/:id", async (c) => {
   } catch (err) {
     if (err instanceof PermissionDeniedError) throw err;
     console.error("DELETE /api/diagrams/:id error:", err);
-    return errorResponse(c, "DELETE_FAILED", "Failed to delete diagram", 500);
+    return errorFromCode(c, ApiError.DELETE_FAILED);
   }
 });
 
@@ -858,9 +857,9 @@ app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
     if (err instanceof PermissionDeniedError) throw err;
     console.error("PUT /api/diagrams/:id/thumbnail error:", err);
     if (err instanceof SyntaxError) {
-      return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
+      return errorFromCode(c, ApiError.INVALID_JSON);
     }
-    return errorResponse(c, "THUMBNAIL_FAILED", "Failed to update thumbnail", 500);
+    return errorFromCode(c, ApiError.THUMBNAIL_FAILED);
   }
 });
 
@@ -883,7 +882,7 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
     // Convert data URL to binary response for efficient caching
     const matches = dataUrl.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
     if (!matches) {
-      return errorResponse(c, "INVALID_THUMBNAIL", "Invalid thumbnail data", 500);
+      return errorFromCode(c, ApiError.INVALID_THUMBNAIL);
     }
 
     const buffer = Buffer.from(matches[2], "base64");
@@ -895,7 +894,7 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
     });
   } catch (err) {
     console.error("GET /api/diagrams/:id/thumbnail error:", err);
-    return errorResponse(c, "THUMBNAIL_LOAD_FAILED", "Failed to load thumbnail", 500);
+    return errorFromCode(c, ApiError.THUMBNAIL_LOAD_FAILED);
   }
 });
 
@@ -1294,7 +1293,7 @@ app.get("/api/performance/stats", rateLimiters.admin, (c) => {
     });
   } catch (err) {
     console.error("GET /api/performance/stats error:", err);
-    return errorResponse(c, "STATS_FAILED", "Failed to get performance stats", 500);
+    return errorFromCode(c, ApiError.STATS_FAILED);
   }
 });
 
@@ -1308,7 +1307,7 @@ app.post("/api/performance/clear-cache", rateLimiters.admin, (c) => {
     return operationResponse(c, true, "All caches cleared");
   } catch (err) {
     console.error("POST /api/performance/clear-cache error:", err);
-    return errorResponse(c, "CACHE_CLEAR_FAILED", "Failed to clear cache", 500);
+    return errorFromCode(c, ApiError.CACHE_CLEAR_FAILED);
   }
 });
 
@@ -1321,7 +1320,7 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
 
     // Only admins can view audit log
     if (user?.role !== "admin") {
-      return errorResponse(c, "FORBIDDEN", "Admin access required", 403);
+      return errorFromCode(c, ApiError.ADMIN_REQUIRED);
     }
 
     const limitParam = c.req.query("limit");
@@ -1336,7 +1335,7 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
     // Validate action parameter if provided
     const action = actionParam && isValidAuditAction(actionParam) ? actionParam : undefined;
     if (actionParam && !action) {
-      return errorResponse(c, "INVALID_ACTION", `Invalid audit action: ${actionParam}`, 400);
+      return errorFromCode(c, ApiError.INVALID_ACTION, `Invalid audit action: ${actionParam}`);
     }
 
     const entries = getAuditLog({
@@ -1353,7 +1352,7 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
     });
   } catch (err) {
     console.error("GET /api/audit error:", err);
-    return errorResponse(c, "AUDIT_FAILED", "Failed to get audit log", 500);
+    return errorFromCode(c, ApiError.AUDIT_FAILED);
   }
 });
 
@@ -1364,14 +1363,14 @@ app.get("/api/audit/stats", rateLimiters.admin, requireAuth(), (c) => {
 
     // Only admins can view audit stats
     if (user?.role !== "admin") {
-      return errorResponse(c, "FORBIDDEN", "Admin access required", 403);
+      return errorFromCode(c, ApiError.ADMIN_REQUIRED);
     }
 
     const stats = getAuditStats();
     return c.json(stats);
   } catch (err) {
     console.error("GET /api/audit/stats error:", err);
-    return errorResponse(c, "AUDIT_STATS_FAILED", "Failed to get audit stats", 500);
+    return errorFromCode(c, ApiError.AUDIT_STATS_FAILED);
   }
 });
 
@@ -1384,7 +1383,7 @@ app.get("/api/collab/stats", (c) => {
     return c.json(stats);
   } catch (err) {
     console.error("GET /api/collab/stats error:", err);
-    return errorResponse(c, "COLLAB_STATS_FAILED", "Failed to get collaboration stats", 500);
+    return errorFromCode(c, ApiError.COLLAB_STATS_FAILED);
   }
 });
 
@@ -1413,7 +1412,7 @@ app.get("/api/collab/rooms/:diagramId", (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     console.error("GET /api/collab/rooms/:diagramId error:", err);
-    return errorResponse(c, "ROOM_INFO_FAILED", "Failed to get room info", 500);
+    return errorFromCode(c, ApiError.ROOM_INFO_FAILED);
   }
 });
 
@@ -1426,7 +1425,7 @@ app.get("/api/diagram-types", (c) => {
     return c.json({ types, count: types.length });
   } catch (err) {
     console.error("GET /api/diagram-types error:", err);
-    return errorResponse(c, "LIST_TYPES_FAILED", "Failed to list diagram types", 500);
+    return errorFromCode(c, ApiError.LIST_TYPES_FAILED);
   }
 });
 
@@ -1438,7 +1437,7 @@ app.get("/api/diagram-types/:type", (c) => {
     return c.json(info);
   } catch (err) {
     console.error("GET /api/diagram-types/:type error:", err);
-    return errorResponse(c, "TYPE_INFO_FAILED", "Failed to get diagram type info", 500);
+    return errorFromCode(c, ApiError.TYPE_INFO_FAILED);
   }
 });
 
@@ -1450,7 +1449,7 @@ app.get("/api/diagram-types/:type/template", (c) => {
     return c.json({ template });
   } catch (err) {
     console.error("GET /api/diagram-types/:type/template error:", err);
-    return errorResponse(c, "TEMPLATE_FAILED", "Failed to get diagram template", 500);
+    return errorFromCode(c, ApiError.TEMPLATE_FAILED);
   }
 });
 
@@ -1475,7 +1474,7 @@ app.get("/api/diagrams/:id/export/mermaid", (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     console.error("GET /api/diagrams/:id/export/mermaid error:", err);
-    return errorResponse(c, "MERMAID_EXPORT_FAILED", "Failed to export to Mermaid", 500);
+    return errorFromCode(c, ApiError.MERMAID_EXPORT_FAILED);
   }
 });
 
@@ -1486,7 +1485,7 @@ app.get("/api/export-formats", (c) => {
     return c.json({ formats, count: formats.length });
   } catch (err) {
     console.error("GET /api/export-formats error:", err);
-    return errorResponse(c, "FORMATS_FAILED", "Failed to get export formats", 500);
+    return errorFromCode(c, ApiError.FORMATS_FAILED);
   }
 });
 
@@ -1507,7 +1506,7 @@ app.get("/api/llm/status", async (c) => {
     });
   } catch (err) {
     console.error("GET /api/llm/status error:", err);
-    return errorResponse(c, "LLM_STATUS_ERROR", "Failed to get LLM status", 500);
+    return errorFromCode(c, ApiError.LLM_STATUS_ERROR);
   }
 });
 
@@ -1780,7 +1779,7 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
   } catch (err) {
     if (err instanceof PermissionDeniedError) throw err;
     console.error("POST /api/diagrams/:id/apply-theme error:", err);
-    return errorResponse(c, "THEME_APPLY_FAILED", "Failed to apply theme", 500);
+    return errorFromCode(c, ApiError.THEME_APPLY_FAILED);
   }
 });
 
