@@ -13,6 +13,13 @@ import { getProviderRegistry, listConfiguredProviders } from "./llm";
 import { listThemes, getTheme, generateStyledCSS, applyThemeToDiagram } from "./styling";
 import { layoutDiagram, listLayoutAlgorithms, type LayoutOptions, type LayoutAlgorithm } from "./layout";
 import { diffSpecs, generateChangelog, type DiagramDiff } from "./versioning";
+import {
+  diagramCache,
+  listCache,
+  generateETag,
+  matchesETag,
+  getSpecComplexity,
+} from "./performance";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -81,41 +88,109 @@ app.notFound((c) => {
 // Health check
 app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 
-// List diagrams
+// List diagrams with pagination and caching
 app.get("/api/diagrams", (c) => {
   try {
     const project = c.req.query("project");
-    const diagrams = storage.listDiagrams(project);
+    const limitParam = c.req.query("limit");
+    const offsetParam = c.req.query("offset");
+    const minimal = c.req.query("minimal") === "true";
+
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
+    const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
+
+    // Check cache for list results
+    const cacheKey = `list:${project || "all"}:${limit}:${offset}:${minimal}`;
+    const cached = listCache.get(cacheKey);
+    if (cached) {
+      const etag = generateETag(cached);
+      if (matchesETag(c.req.header("If-None-Match"), etag)) {
+        return new Response(null, { status: 304 });
+      }
+      c.header("ETag", etag);
+      c.header("X-Cache", "HIT");
+      return c.json(cached);
+    }
+
+    const allDiagrams = storage.listDiagrams(project);
     const projects = storage.listProjects();
-    return c.json({
-      count: diagrams.length,
-      diagrams: diagrams.map((d) => ({
+    const total = allDiagrams.length;
+    const paginated = allDiagrams.slice(offset, offset + limit);
+
+    const response = {
+      count: paginated.length,
+      total,
+      offset,
+      limit,
+      diagrams: paginated.map((d) => ({
         id: d.id,
         name: d.name,
         project: d.project,
-        spec: d.spec,
+        // Skip spec in minimal mode for faster list loading
+        ...(minimal
+          ? { nodeCount: d.spec.nodes?.length ?? 0 }
+          : { spec: d.spec }),
         thumbnailUrl: d.thumbnailUrl,
         updatedAt: d.updatedAt,
       })),
       projects,
-    });
+    };
+
+    // Cache and set ETag
+    listCache.set(cacheKey, response);
+    const etag = generateETag(response);
+    c.header("ETag", etag);
+    c.header("X-Cache", "MISS");
+    c.header("Cache-Control", "private, max-age=30");
+
+    return c.json(response);
   } catch (err) {
     throw new APIError("LIST_FAILED", "Failed to list diagrams", 500);
   }
 });
 
-// Get diagram
+// Get diagram with caching
 app.get("/api/diagrams/:id", (c) => {
   try {
     const id = c.req.param("id");
     if (!id?.trim()) {
       throw new APIError("INVALID_ID", "Diagram ID is required", 400);
     }
+
+    // Check cache
+    const cacheKey = `diagram:${id}`;
+    const cached = diagramCache.get(cacheKey);
+    if (cached) {
+      const etag = generateETag(cached);
+      if (matchesETag(c.req.header("If-None-Match"), etag)) {
+        return new Response(null, { status: 304 });
+      }
+      c.header("ETag", etag);
+      c.header("X-Cache", "HIT");
+      return c.json(cached);
+    }
+
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
-    return c.json(diagram);
+
+    // Add complexity info for client-side optimization decisions
+    const complexity = getSpecComplexity(diagram.spec);
+
+    const response = {
+      ...diagram,
+      complexity,
+    };
+
+    // Cache the response
+    diagramCache.set(cacheKey, response);
+    const etag = generateETag(response);
+    c.header("ETag", etag);
+    c.header("X-Cache", "MISS");
+    c.header("Cache-Control", "private, max-age=60");
+
+    return c.json(response);
   } catch (err) {
     if (err instanceof APIError) throw err;
     throw new APIError("GET_FAILED", "Failed to get diagram", 500);
@@ -138,6 +213,10 @@ app.post("/api/diagrams", async (c) => {
     }
 
     const diagram = storage.createDiagram(body.name.trim(), body.project?.trim() || "default", body.spec);
+
+    // Invalidate list cache (new diagram added)
+    listCache.invalidatePattern(/^list:/);
+
     return c.json(diagram, 201);
   } catch (err) {
     console.error("POST /api/diagrams error:", err);
@@ -163,6 +242,11 @@ app.put("/api/diagrams/:id", async (c) => {
     }
 
     const updated = storage.updateDiagram(id, body.spec, body.message);
+
+    // Invalidate caches for this diagram
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+
     return c.json(updated);
   } catch (err) {
     console.error("PUT /api/diagrams/:id error:", err);
@@ -180,6 +264,11 @@ app.delete("/api/diagrams/:id", (c) => {
     if (!storage.deleteDiagram(id)) {
       return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
     }
+
+    // Invalidate caches
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+
     return c.json({ success: true });
   } catch (err) {
     console.error("DELETE /api/diagrams/:id error:", err);
@@ -525,6 +614,54 @@ app.get("/api/agents/:id", async (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     throw new APIError("AGENT_GET_FAILED", "Failed to get agent", 500);
+  }
+});
+
+// Performance stats endpoint
+app.get("/api/performance/stats", (c) => {
+  try {
+    const diagramStats = diagramCache.getStats();
+    const listStats = listCache.getStats();
+
+    return c.json({
+      cache: {
+        diagrams: diagramStats,
+        lists: listStats,
+        total: {
+          entries: diagramStats.entries + listStats.entries,
+          sizeBytes: diagramStats.sizeBytes + listStats.sizeBytes,
+          sizeMB: ((diagramStats.sizeBytes + listStats.sizeBytes) / 1024 / 1024).toFixed(2),
+          hits: diagramStats.hits + listStats.hits,
+          misses: diagramStats.misses + listStats.misses,
+          hitRate: (
+            (diagramStats.hits + listStats.hits) /
+            Math.max(1, diagramStats.hits + listStats.hits + diagramStats.misses + listStats.misses)
+          ).toFixed(3),
+        },
+      },
+      memory: {
+        heapUsed: process.memoryUsage?.()?.heapUsed ?? 0,
+        heapTotal: process.memoryUsage?.()?.heapTotal ?? 0,
+        rss: process.memoryUsage?.()?.rss ?? 0,
+      },
+      uptime: process.uptime?.() ?? 0,
+    });
+  } catch (err) {
+    console.error("GET /api/performance/stats error:", err);
+    return c.json({ error: true, message: "Failed to get performance stats" }, 500);
+  }
+});
+
+// Clear caches (admin endpoint)
+app.post("/api/performance/clear-cache", (c) => {
+  try {
+    diagramCache.clear();
+    listCache.clear();
+    console.log("[performance] All caches cleared");
+    return c.json({ success: true, message: "All caches cleared" });
+  } catch (err) {
+    console.error("POST /api/performance/clear-cache error:", err);
+    return c.json({ error: true, message: "Failed to clear cache" }, 500);
   }
 });
 
