@@ -42,8 +42,9 @@ export interface CSPDirectives {
 const DEFAULT_CSP: CSPDirectives = {
   // Default fallback for all directives
   "default-src": ["'self'"],
-  // Scripts: self + inline needed for tldraw
-  "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+  // Scripts: self + inline needed for tldraw dynamic components
+  // Note: removed unsafe-eval (XSS escalation vector). Production tldraw works without it.
+  "script-src": ["'self'", "'unsafe-inline'"],
   // Styles: self + inline needed for tldraw dynamic styles
   "style-src": ["'self'", "'unsafe-inline'"],
   // Images: self + data URLs (for thumbnails) + blobs (for canvas)
