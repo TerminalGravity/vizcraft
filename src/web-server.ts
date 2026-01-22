@@ -42,6 +42,7 @@ import { rateLimiters } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
 import { requestContext } from "./api/request-context";
+import { diagramBodyLimit, thumbnailBodyLimit, smallBodyLimit } from "./api/body-limit";
 import {
   withTimeout,
   TimeoutError,
@@ -286,8 +287,8 @@ app.get("/api/diagrams/:id", (c) => {
   }
 });
 
-// Create diagram (rate limited)
-app.post("/api/diagrams", rateLimiters.diagramCreate, async (c) => {
+// Create diagram (rate limited, body size limited)
+app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c) => {
   try {
     const body = await c.req.json<{ name: string; project?: string; spec: DiagramSpec }>();
 
@@ -316,8 +317,8 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, async (c) => {
   }
 });
 
-// Update diagram
-app.put("/api/diagrams/:id", async (c) => {
+// Update diagram (body size limited)
+app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
   try {
     const id = c.req.param("id");
     const body = await c.req.json<{ spec: DiagramSpec; message?: string }>();
@@ -369,8 +370,8 @@ app.delete("/api/diagrams/:id", async (c) => {
   }
 });
 
-// Update diagram thumbnail (saves to filesystem)
-app.put("/api/diagrams/:id/thumbnail", async (c) => {
+// Update diagram thumbnail (saves to filesystem, body size limited)
+app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
   try {
     const id = c.req.param("id");
     const body = await c.req.json<{ thumbnail: string }>();
