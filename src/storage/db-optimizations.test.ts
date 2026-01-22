@@ -128,6 +128,14 @@ describe("Database Optimizations", () => {
 
       expect(result?.name).toBe("idx_agent_runs_status");
     });
+
+    it("has idx_diagrams_type expression index for type filtering", () => {
+      const result = db.query<{ name: string }, [string]>(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name=?"
+      ).get("idx_diagrams_type");
+
+      expect(result?.name).toBe("idx_diagrams_type");
+    });
   });
 
   describe("Query Performance", () => {
@@ -168,6 +176,16 @@ describe("Database Optimizations", () => {
 
       const planText = plan.map((p) => p.detail).join(" ");
       expect(planText).toMatch(/USING INDEX|USING COVERING INDEX/i);
+    });
+
+    it("uses expression index for diagram type filtering", () => {
+      const plan = db.query<{ detail: string }, []>(
+        "EXPLAIN QUERY PLAN SELECT * FROM diagrams WHERE json_extract(spec, '$.type') IN ('flowchart', 'architecture')"
+      ).all();
+
+      const planText = plan.map((p) => p.detail).join(" ");
+      // Should use the expression index, not a full table scan
+      expect(planText).toMatch(/USING INDEX idx_diagrams_type/i);
     });
   });
 });

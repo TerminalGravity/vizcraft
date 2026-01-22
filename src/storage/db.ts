@@ -111,6 +111,11 @@ db.run(`CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)`)
 // This helps with case-insensitive sorting and prefix searches
 db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_name_nocase ON diagrams(name COLLATE NOCASE)`);
 
+// Expression index for diagram type filtering
+// Enables efficient queries like: WHERE json_extract(spec, '$.type') IN ('flowchart', 'architecture')
+// Without this, SQLite performs a full table scan extracting JSON from every row
+db.run(`CREATE INDEX IF NOT EXISTS idx_diagrams_type ON diagrams(json_extract(spec, '$.type'))`);
+
 // FTS5 full-text search virtual table for diagram names
 // This enables efficient substring and token-based searching
 db.run(`
