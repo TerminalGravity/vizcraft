@@ -9,6 +9,7 @@ import { storage } from "./storage/db";
 import { loadAgents, getAgent } from "./agents/loader";
 import { runAgent } from "./agents/runner";
 import { getProviderRegistry, listConfiguredProviders } from "./llm";
+import { listThemes, getTheme, generateStyledCSS, applyThemeToDiagram } from "./styling";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -189,6 +190,57 @@ app.get("/api/llm/status", async (c) => {
   } catch (err) {
     console.error("GET /api/llm/status error:", err);
     return c.json({ error: true, message: "Failed to get LLM status", code: "LLM_STATUS_ERROR" }, 500);
+  }
+});
+
+// List available themes
+app.get("/api/themes", (c) => {
+  const themes = listThemes().map((t) => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    mode: t.mode,
+  }));
+  return c.json({ themes });
+});
+
+// Get theme details
+app.get("/api/themes/:id", (c) => {
+  const id = c.req.param("id");
+  const theme = getTheme(id);
+  return c.json(theme);
+});
+
+// Get theme CSS
+app.get("/api/themes/:id/css", (c) => {
+  const id = c.req.param("id");
+  const theme = getTheme(id);
+  const css = generateStyledCSS(theme);
+  c.header("Content-Type", "text/css");
+  return c.text(css);
+});
+
+// Apply theme to diagram
+app.post("/api/diagrams/:id/apply-theme", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const body = await c.req.json<{ themeId: string }>();
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      return c.json({ error: true, message: "Diagram not found", code: "DIAGRAM_NOT_FOUND" }, 404);
+    }
+
+    const themedSpec = applyThemeToDiagram(diagram.spec, body.themeId);
+    const updated = storage.updateDiagram(id, themedSpec, `Applied theme: ${body.themeId}`);
+
+    return c.json({
+      success: true,
+      diagram: updated,
+    });
+  } catch (err) {
+    console.error("POST /api/diagrams/:id/apply-theme error:", err);
+    return c.json({ error: true, message: "Failed to apply theme", code: "THEME_APPLY_FAILED" }, 500);
   }
 });
 

@@ -88,6 +88,25 @@ const api = {
     });
     return res.json();
   },
+
+  async listThemes(): Promise<{ themes: Theme[] }> {
+    const res = await fetch(`${API_URL}/themes`);
+    return res.json();
+  },
+
+  async getThemeCSS(themeId: string): Promise<string> {
+    const res = await fetch(`${API_URL}/themes/${themeId}/css`);
+    return res.text();
+  },
+
+  async applyTheme(diagramId: string, themeId: string): Promise<{ success: boolean; diagram: Diagram }> {
+    const res = await fetch(`${API_URL}/diagrams/${diagramId}/apply-theme`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ themeId }),
+    });
+    return res.json();
+  },
 };
 
 // Icons
@@ -171,7 +190,7 @@ const Icons = {
   ),
 };
 
-// Thumbnail generation utility
+// Thumbnail generation utility using tldraw v4 API
 const generateThumbnail = async (
   editor: any,
   maxWidth = 120,
@@ -181,20 +200,20 @@ const generateThumbnail = async (
     const shapeIds = editor.getCurrentPageShapeIds();
     if (shapeIds.size === 0) return null;
 
-    const svg = await editor.getSvg([...shapeIds], {
-      padding: 8,
+    // Use tldraw v4's toImage API
+    const result = await editor.toImage([...shapeIds], {
+      format: 'png',
       background: true,
+      padding: 8,
       scale: 0.5,
     });
 
-    if (!svg) return null;
+    if (!result?.blob) return null;
 
-    const svgString = new XMLSerializer().serializeToString(svg);
-
+    // Convert blob to data URL and resize
     return new Promise((resolve) => {
       const img = new Image();
-      const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
-      const url = URL.createObjectURL(svgBlob);
+      const url = URL.createObjectURL(result.blob);
 
       img.onload = () => {
         // Calculate dimensions preserving aspect ratio
@@ -248,6 +267,14 @@ interface Agent {
   name: string;
   description?: string;
   type: "rule-based" | "preset" | "llm";
+}
+
+// Theme type from API
+interface Theme {
+  id: string;
+  name: string;
+  description: string;
+  mode: "dark" | "light";
 }
 
 // Agent icons by type/name
@@ -623,10 +650,27 @@ function App() {
 
   const selectedDiagram = diagrams.find((d) => d.id === selectedId) || null;
 
-  // Apply theme to document
+  // Apply theme to document and inject premium CSS
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("vizcraft-theme", theme);
+
+    // Inject premium theme CSS
+    const styleId = "vizcraft-premium-theme";
+    let styleEl = document.getElementById(styleId) as HTMLStyleElement;
+    if (!styleEl) {
+      styleEl = document.createElement("style");
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+
+    // Fetch and inject theme CSS
+    api.getThemeCSS(theme).then((css) => {
+      styleEl.textContent = css;
+    }).catch(() => {
+      // Fallback if API fails
+      console.warn("Failed to load premium theme CSS");
+    });
   }, [theme]);
 
   const toggleTheme = () => {
@@ -856,67 +900,59 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
       }
 
       if (format === "svg") {
-        // Export as SVG using editor.getSvg()
-        const svg = await editor.getSvg([...shapeIds], {
-          padding: 32,
+        // Export as SVG using tldraw v4 API
+        const result = await editor.toImage([...shapeIds], {
+          format: 'svg',
           background: true,
+          padding: 32,
         });
 
-        if (svg) {
-          const svgString = new XMLSerializer().serializeToString(svg);
-          const blob = new Blob([svgString], { type: "image/svg+xml" });
-          downloadBlob(blob, `${selectedDiagram.name}.svg`);
+        if (result?.blob) {
+          downloadBlob(result.blob, `${selectedDiagram.name}.svg`);
         }
       } else if (format === "png") {
-        // Export as PNG by converting SVG to canvas
-        const svg = await editor.getSvg([...shapeIds], {
-          padding: 32,
+        // Export as PNG using tldraw v4 API
+        const result = await editor.toImage([...shapeIds], {
+          format: 'png',
           background: true,
+          padding: 32,
           scale: 2,
         });
 
-        if (svg) {
-          const svgString = new XMLSerializer().serializeToString(svg);
-          const blob = await svgToPngBlob(svgString);
-          if (blob) {
-            downloadBlob(blob, `${selectedDiagram.name}.png`);
-          }
+        if (result?.blob) {
+          downloadBlob(result.blob, `${selectedDiagram.name}.png`);
         }
       } else if (format === "pdf") {
-        // Export as PDF using jsPDF
-        const svg = await editor.getSvg([...shapeIds], {
-          padding: 32,
+        // Export as PNG first, then convert to PDF
+        const result = await editor.toImage([...shapeIds], {
+          format: 'png',
           background: true,
+          padding: 32,
           scale: 2,
         });
 
-        if (svg) {
-          const svgString = new XMLSerializer().serializeToString(svg);
-          const pngBlob = await svgToPngBlob(svgString);
+        if (result?.blob) {
+          // Convert blob to data URL for jsPDF
+          const reader = new FileReader();
+          reader.onload = () => {
+            const imgData = reader.result as string;
 
-          if (pngBlob) {
-            // Convert blob to data URL
-            const reader = new FileReader();
-            reader.onload = () => {
-              const imgData = reader.result as string;
+            // Create PDF with appropriate orientation
+            const img = new Image();
+            img.onload = () => {
+              const isLandscape = img.width > img.height;
+              const pdf = new jsPDF({
+                orientation: isLandscape ? "landscape" : "portrait",
+                unit: "px",
+                format: [img.width, img.height],
+              });
 
-              // Create PDF with appropriate orientation
-              const img = new Image();
-              img.onload = () => {
-                const isLandscape = img.width > img.height;
-                const pdf = new jsPDF({
-                  orientation: isLandscape ? "landscape" : "portrait",
-                  unit: "px",
-                  format: [img.width, img.height],
-                });
-
-                pdf.addImage(imgData, "PNG", 0, 0, img.width, img.height);
-                pdf.save(`${selectedDiagram.name}.pdf`);
-              };
-              img.src = imgData;
+              pdf.addImage(imgData, "PNG", 0, 0, img.width, img.height);
+              pdf.save(`${selectedDiagram.name}.pdf`);
             };
-            reader.readAsDataURL(pngBlob);
-          }
+            img.src = imgData;
+          };
+          reader.readAsDataURL(result.blob);
         }
       }
     } catch (err) {
@@ -925,43 +961,6 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
     } finally {
       setExporting(false);
     }
-  };
-
-  // Convert SVG string to PNG blob
-  const svgToPngBlob = (svgString: string): Promise<Blob | null> => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
-      const url = URL.createObjectURL(svgBlob);
-
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-
-        if (ctx) {
-          ctx.fillStyle = "#0f172a"; // Dark background
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0);
-
-          canvas.toBlob((blob) => {
-            URL.revokeObjectURL(url);
-            resolve(blob);
-          }, "image/png");
-        } else {
-          URL.revokeObjectURL(url);
-          resolve(null);
-        }
-      };
-
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve(null);
-      };
-
-      img.src = url;
-    });
   };
 
   // Helper to download blob as file
