@@ -1,0 +1,9 @@
+name: "Force Layout"
+description: "Organic force-directed layout for natural-looking diagrams"
+type: "rule-based"
+layout:
+  algorithm: "elk-force"
+  spacing:
+    nodeSpacing: 80
+actions:
+  - elk_layout

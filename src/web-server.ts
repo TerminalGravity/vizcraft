@@ -11,6 +11,7 @@ import { loadAgents, getAgent } from "./agents/loader";
 import { runAgent } from "./agents/runner";
 import { getProviderRegistry, listConfiguredProviders } from "./llm";
 import { listThemes, getTheme, generateStyledCSS, applyThemeToDiagram } from "./styling";
+import { layoutDiagram, listLayoutAlgorithms, type LayoutOptions, type LayoutAlgorithm } from "./layout";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -349,6 +350,109 @@ app.get("/api/themes/:id/css", (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     throw new APIError("THEME_CSS_FAILED", "Failed to generate theme CSS", 500);
+  }
+});
+
+// List available layout algorithms
+app.get("/api/layouts", (c) => {
+  try {
+    const algorithms = listLayoutAlgorithms();
+    return c.json({ algorithms, count: algorithms.length });
+  } catch (err) {
+    throw new APIError("LAYOUTS_FAILED", "Failed to list layout algorithms", 500);
+  }
+});
+
+// Apply layout to diagram
+app.post("/api/diagrams/:id/apply-layout", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      algorithm: LayoutAlgorithm;
+      direction?: "DOWN" | "RIGHT" | "UP" | "LEFT";
+      spacing?: { nodeSpacing?: number; edgeSpacing?: number; layerSpacing?: number };
+      padding?: number;
+    }>();
+
+    if (!body.algorithm) {
+      throw new APIError("MISSING_ALGORITHM", "Layout algorithm is required", 400);
+    }
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("DIAGRAM_NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const options: LayoutOptions = {
+      algorithm: body.algorithm,
+      direction: body.direction,
+      spacing: body.spacing,
+      padding: body.padding,
+    };
+
+    const result = await layoutDiagram(diagram.spec, options);
+
+    if (!result.success) {
+      throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
+    }
+
+    // Update diagram with new positions
+    const updated = storage.updateDiagram(id, result.spec!, `Applied layout: ${body.algorithm}`);
+
+    return c.json({
+      success: true,
+      diagram: updated,
+      duration: result.duration,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("POST /api/diagrams/:id/apply-layout error:", err);
+    throw new APIError("LAYOUT_ERROR", "Failed to apply layout", 500);
+  }
+});
+
+// Preview layout (returns positions without saving)
+app.post("/api/diagrams/:id/preview-layout", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const body = await c.req.json<{
+      algorithm: LayoutAlgorithm;
+      direction?: "DOWN" | "RIGHT" | "UP" | "LEFT";
+      spacing?: { nodeSpacing?: number; edgeSpacing?: number; layerSpacing?: number };
+      padding?: number;
+    }>();
+
+    if (!body.algorithm) {
+      throw new APIError("MISSING_ALGORITHM", "Layout algorithm is required", 400);
+    }
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("DIAGRAM_NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const options: LayoutOptions = {
+      algorithm: body.algorithm,
+      direction: body.direction,
+      spacing: body.spacing,
+      padding: body.padding,
+    };
+
+    const result = await layoutDiagram(diagram.spec, options);
+
+    if (!result.success) {
+      throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
+    }
+
+    return c.json({
+      success: true,
+      spec: result.spec,
+      duration: result.duration,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("POST /api/diagrams/:id/preview-layout error:", err);
+    throw new APIError("LAYOUT_ERROR", "Failed to preview layout", 500);
   }
 });
 
