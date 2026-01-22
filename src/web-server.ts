@@ -41,6 +41,7 @@ import { join, extname } from "path";
 import { rateLimiters } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
+import { requestContext } from "./api/request-context";
 import {
   withTimeout,
   TimeoutError,
@@ -76,6 +77,9 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // Middleware
+// Request context (must be first to track timing)
+app.use("*", requestContext());
+
 app.use(
   "*",
   cors({
