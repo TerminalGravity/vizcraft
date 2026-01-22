@@ -207,8 +207,21 @@ export function validateDiagramChange(change: unknown): {
 }
 
 /**
+ * Maximum nodes/edges that can be added in a single change batch
+ * This provides early rejection before the expensive database quota check
+ */
+const MAX_BATCH_ADDS = {
+  NODES: 100, // Max nodes added per batch
+  EDGES: 500, // Max edges added per batch
+};
+
+/**
  * Validate an array of diagram changes
  * Returns validation result with index of first invalid change
+ *
+ * Also validates batch limits to prevent quota bypass attacks:
+ * - Rejects batches adding more than MAX_BATCH_ADDS nodes/edges
+ * - Full quota validation happens on database persistence
  */
 export function validateDiagramChanges(changes: unknown[]): {
   valid: boolean;
@@ -217,6 +230,10 @@ export function validateDiagramChanges(changes: unknown[]): {
   data?: DiagramChange[];
 } {
   const validatedChanges: DiagramChange[] = [];
+
+  // Count adds for quota-aware validation
+  let nodesAdded = 0;
+  let edgesAdded = 0;
 
   for (let i = 0; i < changes.length; i++) {
     const change = changes[i];
@@ -230,7 +247,29 @@ export function validateDiagramChanges(changes: unknown[]): {
       };
     }
 
-    validatedChanges.push(result.data!);
+    const validated = result.data!;
+    validatedChanges.push(validated);
+
+    // Track adds for quota enforcement
+    if (validated.action === "add_node") {
+      nodesAdded++;
+      if (nodesAdded > MAX_BATCH_ADDS.NODES) {
+        return {
+          valid: false,
+          error: `Batch exceeds maximum node additions (${MAX_BATCH_ADDS.NODES})`,
+          invalidIndex: i,
+        };
+      }
+    } else if (validated.action === "add_edge") {
+      edgesAdded++;
+      if (edgesAdded > MAX_BATCH_ADDS.EDGES) {
+        return {
+          valid: false,
+          error: `Batch exceeds maximum edge additions (${MAX_BATCH_ADDS.EDGES})`,
+          invalidIndex: i,
+        };
+      }
+    }
   }
 
   return { valid: true, data: validatedChanges };
