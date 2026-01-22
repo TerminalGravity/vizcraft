@@ -190,13 +190,24 @@ describe("OpenAIProvider", () => {
     expect(provider.isConfigured).toBe(true);
   });
 
-  it("healthCheck returns false (not implemented)", async () => {
+  it("healthCheck returns false when not configured", async () => {
+    // Remove API key to test unconfigured state
+    const originalKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
     const provider = new OpenAIProvider();
     const result = await provider.healthCheck();
     expect(result).toBe(false);
+
+    // Restore
+    if (originalKey) process.env.OPENAI_API_KEY = originalKey;
   });
 
-  it("transformDiagram returns not implemented error", async () => {
+  it("transformDiagram returns error when not configured", async () => {
+    // Remove API key to test unconfigured state
+    const originalKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
     const provider = new OpenAIProvider();
     const request: DiagramTransformRequest = {
       spec: { type: "flowchart", nodes: [], edges: [] },
@@ -205,7 +216,10 @@ describe("OpenAIProvider", () => {
 
     const result = await provider.transformDiagram(request);
     expect(result.success).toBe(false);
-    expect(result.error).toContain("not yet implemented");
+    expect(result.error).toContain("API key not configured");
+
+    // Restore
+    if (originalKey) process.env.OPENAI_API_KEY = originalKey;
   });
 
   it("createOpenAIProvider factory works", () => {
