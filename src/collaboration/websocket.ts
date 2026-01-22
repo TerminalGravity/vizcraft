@@ -1,0 +1,152 @@
+/**
+ * WebSocket Handler for Collaboration
+ *
+ * Handles WebSocket connections for real-time diagram collaboration.
+ * Uses Bun's native WebSocket support.
+ */
+
+import { roomManager } from "./room-manager";
+import type { ClientMessage } from "./types";
+
+// Track WebSocket to ServerWebSocket mapping for Bun
+type BunWebSocket = {
+  send: (message: string) => void;
+  close: () => void;
+  readyState: number;
+  data?: { participantId?: string };
+};
+
+/**
+ * Handle WebSocket upgrade request
+ */
+export function handleWebSocketUpgrade(req: Request, server: any): Response | undefined {
+  const url = new URL(req.url);
+
+  // Only handle /ws/collab path
+  if (url.pathname !== "/ws/collab") {
+    return undefined;
+  }
+
+  // Upgrade to WebSocket
+  const upgraded = server.upgrade(req, {
+    data: {
+      participantId: null,
+    },
+  });
+
+  if (!upgraded) {
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
+  return undefined; // Return nothing on successful upgrade
+}
+
+/**
+ * Handle WebSocket open
+ */
+export function handleWebSocketOpen(ws: BunWebSocket): void {
+  const wrappedWs = wrapWebSocket(ws);
+  roomManager.registerConnection(wrappedWs);
+}
+
+/**
+ * Handle WebSocket message
+ */
+export function handleWebSocketMessage(ws: BunWebSocket, message: string | Buffer): void {
+  const wrappedWs = wrapWebSocket(ws);
+
+  try {
+    const data = JSON.parse(message.toString()) as ClientMessage;
+
+    switch (data.type) {
+      case "join":
+        roomManager.joinRoom(wrappedWs, data.diagramId, data.name);
+        break;
+
+      case "leave":
+        roomManager.leaveRoom(wrappedWs);
+        break;
+
+      case "cursor":
+        roomManager.updateCursor(wrappedWs, data.x, data.y);
+        break;
+
+      case "selection":
+        roomManager.updateSelection(wrappedWs, data.nodeIds);
+        break;
+
+      case "change":
+        roomManager.handleChanges(wrappedWs, data.changes, data.baseVersion);
+        break;
+
+      case "ping":
+        // Ping is handled automatically, but acknowledge it
+        wrappedWs.send(JSON.stringify({ type: "pong" }));
+        break;
+
+      default:
+        console.warn("[collab] Unknown message type:", (data as any).type);
+    }
+  } catch (err) {
+    console.error("[collab] Error handling message:", err);
+    wrappedWs.send(JSON.stringify({
+      type: "error",
+      message: "Invalid message format",
+      code: "INVALID_MESSAGE",
+    }));
+  }
+}
+
+/**
+ * Handle WebSocket close
+ */
+export function handleWebSocketClose(ws: BunWebSocket): void {
+  const wrappedWs = wrapWebSocket(ws);
+  roomManager.handleDisconnect(wrappedWs);
+}
+
+/**
+ * Handle WebSocket error
+ */
+export function handleWebSocketError(ws: BunWebSocket, error: Error): void {
+  console.error("[collab] WebSocket error:", error);
+  const wrappedWs = wrapWebSocket(ws);
+  roomManager.handleDisconnect(wrappedWs);
+}
+
+/**
+ * Wrap Bun's WebSocket to match our interface
+ */
+function wrapWebSocket(ws: BunWebSocket): {
+  send: (message: string) => void;
+  close: () => void;
+  readyState: number;
+} {
+  return {
+    send: (message: string) => ws.send(message),
+    close: () => ws.close(),
+    get readyState() { return ws.readyState; },
+  };
+}
+
+/**
+ * Broadcast sync to a diagram room
+ * Called when diagram is updated through REST API
+ */
+export function broadcastDiagramSync(diagramId: string, spec: unknown): void {
+  roomManager.broadcastSync(diagramId, spec);
+}
+
+/**
+ * Get collaboration stats
+ */
+export function getCollabStats(): ReturnType<typeof roomManager.getStats> {
+  return roomManager.getStats();
+}
+
+/**
+ * Get room info
+ */
+export function getRoomInfo(diagramId: string): ReturnType<typeof roomManager.getRoomInfo> {
+  return roomManager.getRoomInfo(diagramId);
+}

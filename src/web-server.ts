@@ -20,6 +20,15 @@ import {
   matchesETag,
   getSpecComplexity,
 } from "./performance";
+import {
+  handleWebSocketOpen,
+  handleWebSocketMessage,
+  handleWebSocketClose,
+  handleWebSocketError,
+  broadcastDiagramSync,
+  getCollabStats,
+  getRoomInfo,
+} from "./collaboration";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -246,6 +255,9 @@ app.put("/api/diagrams/:id", async (c) => {
     // Invalidate caches for this diagram
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
+
+    // Broadcast update to collaborators
+    broadcastDiagramSync(id, body.spec);
 
     return c.json(updated);
   } catch (err) {
@@ -665,6 +677,48 @@ app.post("/api/performance/clear-cache", (c) => {
   }
 });
 
+// ==================== Collaboration Endpoints ====================
+
+// Get collaboration stats
+app.get("/api/collab/stats", (c) => {
+  try {
+    const stats = getCollabStats();
+    return c.json(stats);
+  } catch (err) {
+    console.error("GET /api/collab/stats error:", err);
+    return c.json({ error: true, message: "Failed to get collaboration stats" }, 500);
+  }
+});
+
+// Get room info for a diagram
+app.get("/api/collab/rooms/:diagramId", (c) => {
+  try {
+    const diagramId = c.req.param("diagramId");
+    if (!diagramId?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+
+    const roomInfo = getRoomInfo(diagramId);
+    if (!roomInfo) {
+      return c.json({
+        diagramId,
+        participants: [],
+        version: 0,
+        active: false,
+      });
+    }
+
+    return c.json({
+      ...roomInfo,
+      active: true,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("GET /api/collab/rooms/:diagramId error:", err);
+    return c.json({ error: true, message: "Failed to get room info" }, 500);
+  }
+});
+
 // Get LLM provider status
 app.get("/api/llm/status", async (c) => {
   try {
@@ -786,6 +840,12 @@ app.post("/api/diagrams/:id/apply-layout", async (c) => {
     // Update diagram with new positions
     const updated = storage.updateDiagram(id, result.spec!, `Applied layout: ${body.algorithm}`);
 
+    // Broadcast to collaborators
+    broadcastDiagramSync(id, result.spec!);
+
+    // Invalidate cache
+    diagramCache.delete(`diagram:${id}`);
+
     return c.json({
       success: true,
       diagram: updated,
@@ -857,6 +917,12 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
     const themedSpec = applyThemeToDiagram(diagram.spec, body.themeId);
     const updated = storage.updateDiagram(id, themedSpec, `Applied theme: ${body.themeId}`);
 
+    // Broadcast to collaborators
+    broadcastDiagramSync(id, themedSpec);
+
+    // Invalidate cache
+    diagramCache.delete(`diagram:${id}`);
+
     return c.json({
       success: true,
       diagram: updated,
@@ -888,6 +954,13 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
     if (result.success && result.spec) {
       // Update the diagram with the new spec
       const updated = storage.updateDiagram(diagramId, result.spec, `Agent: ${agent.name}`);
+
+      // Broadcast to collaborators
+      broadcastDiagramSync(diagramId, result.spec);
+
+      // Invalidate cache
+      diagramCache.delete(`diagram:${diagramId}`);
+
       return c.json({
         success: true,
         changes: result.changes,
@@ -1085,8 +1158,19 @@ const mimeTypes: Record<string, string> = {
 
 Bun.serve({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
+
+    // Handle WebSocket upgrade for collaboration
+    if (url.pathname === "/ws/collab") {
+      const upgraded = server.upgrade(req, {
+        data: { participantId: null },
+      });
+      if (upgraded) {
+        return undefined;
+      }
+      return new Response("WebSocket upgrade failed", { status: 500 });
+    }
 
     if (url.pathname.startsWith("/api")) {
       return app.fetch(req);
@@ -1103,9 +1187,26 @@ Bun.serve({
 
     return new Response(Bun.file(join(WEB_DIR, "index.html")), { headers: { "Content-Type": "text/html" } });
   },
+
+  // WebSocket handlers for real-time collaboration
+  websocket: {
+    open(ws) {
+      handleWebSocketOpen(ws as any);
+    },
+    message(ws, message) {
+      handleWebSocketMessage(ws as any, message as string);
+    },
+    close(ws) {
+      handleWebSocketClose(ws as any);
+    },
+    error(ws, error) {
+      handleWebSocketError(ws as any, error);
+    },
+  },
 });
 
 console.log(`[vizcraft] Web UI: http://localhost:${PORT}`);
 console.log(`[vizcraft] API: http://localhost:${PORT}/api`);
+console.log(`[vizcraft] WebSocket: ws://localhost:${PORT}/ws/collab`);
 
 // Note: Do NOT export the server - causes Bun 1.3.2 dev bundler stack overflow
