@@ -251,8 +251,8 @@ function exportERDiagram(spec: DiagramSpec): string {
 function exportMindmap(spec: DiagramSpec): string {
   const lines: string[] = ["mindmap"];
 
-  // Find central node
-  const central = spec.nodes.find((n) => n.type === "central");
+  // Find central node, fall back to first node if none marked as central
+  const central = spec.nodes.find((n) => n.type === "central") ?? spec.nodes[0];
   if (central) {
     lines.push(`  root((${sanitizeLabel(central.label)}))`);
 
@@ -288,7 +288,7 @@ function exportMindmap(spec: DiagramSpec): string {
  * Get Mermaid shape syntax for a node
  */
 function getMermaidShape(node: DiagramNode): string {
-  const label = node.label;
+  const label = sanitizeLabel(node.label);
 
   switch (node.type) {
     case "diamond":
