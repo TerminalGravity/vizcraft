@@ -26,6 +26,7 @@ import {
   handleWebSocketMessage,
   handleWebSocketClose,
   handleWebSocketError,
+  handleWebSocketUpgrade,
   broadcastDiagramSync,
   getCollabStats,
   getRoomInfo,
@@ -96,6 +97,7 @@ import {
   stopThumbnailCleanup,
   getThumbnailCleanupStats,
 } from "./storage/thumbnails";
+import { audit, getAuditLog, getAuditStats, getAuditContext } from "./audit";
 
 // Configuration
 const PORT = parseInt(process.env.WEB_PORT || "3420");
@@ -550,10 +552,23 @@ app.get("/api/diagrams/:id", (c) => {
       throw new APIError("INVALID_ID", "Diagram ID is required", 400);
     }
 
-    // Check cache
+    // Get diagram first to check permissions
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    // Check read permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
+    }
+
+    // Check cache (cache key includes user for user-specific responses)
     const cacheKey = `diagram:${id}`;
     const cached = diagramCache.get(cacheKey) as (typeof response) | undefined;
-    if (cached) {
+    if (cached && cached.version === diagram.version) {
       // Use version-based ETag for optimistic locking support
       const etag = `"v${cached.version}"`;
       if (c.req.header("If-None-Match") === etag) {
@@ -562,11 +577,6 @@ app.get("/api/diagrams/:id", (c) => {
       c.header("ETag", etag);
       c.header("X-Cache", "HIT");
       return c.json(cached);
-    }
-
-    const diagram = storage.getDiagram(id);
-    if (!diagram) {
-      throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
     // Add complexity info for client-side optimization decisions
@@ -589,6 +599,7 @@ app.get("/api/diagrams/:id", (c) => {
     return c.json(response);
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     throw new APIError("GET_FAILED", "Failed to get diagram", 500);
   }
 });
@@ -627,6 +638,14 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
       }
     );
 
+    // Audit log the creation
+    audit("diagram.create", user, diagram.id, {
+      name: diagram.name,
+      project: diagram.project,
+      type: diagram.spec.type,
+      isPublic: body.isPublic ?? false,
+    }, getAuditContext(c.req.raw));
+
     // Invalidate list cache (new diagram added)
     listCache.invalidatePattern(/^list:/);
 
@@ -650,6 +669,19 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
 
     if (!body.spec) {
       return validationErrorResponse(c, "Spec is required");
+    }
+
+    // Check diagram exists and permissions
+    const existing = storage.getDiagram(id);
+    if (!existing) {
+      return notFoundResponse(c, "Diagram", id);
+    }
+
+    // Check write permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(existing);
+    if (!canWrite(user, ownership)) {
+      throw new PermissionDeniedError("write", id);
     }
 
     // Check If-Match header for optimistic locking
@@ -689,7 +721,7 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
     // Perform update with optional optimistic locking
     const result = storage.updateDiagram(id, body.spec, body.message, baseVersion);
 
-    // Handle not found
+    // Handle not found (shouldn't happen after our check above, but defensive)
     if (result === null) {
       return notFoundResponse(c, "Diagram", id);
     }
@@ -705,6 +737,12 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
       }, 409);
     }
 
+    // Audit log the update
+    audit("diagram.update", user, id, {
+      message: body.message,
+      version: result.version,
+    }, getAuditContext(c.req.raw));
+
     // Broadcast update to collaborators
     broadcastDiagramSync(id, body.spec);
 
@@ -714,6 +752,7 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
     return c.json(result);
   } catch (err) {
     console.error("PUT /api/diagrams/:id error:", err);
+    if (err instanceof PermissionDeniedError) throw err;
     if (err instanceof SyntaxError) {
       return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
     }
@@ -726,6 +765,19 @@ app.delete("/api/diagrams/:id", async (c) => {
   try {
     const id = c.req.param("id");
 
+    // Check diagram exists and permissions
+    const existing = storage.getDiagram(id);
+    if (!existing) {
+      return notFoundResponse(c, "Diagram", id);
+    }
+
+    // Check delete permission (only owner or admin)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(existing);
+    if (!canDelete(user, ownership)) {
+      throw new PermissionDeniedError("delete", id);
+    }
+
     // Invalidate caches BEFORE delete for stronger consistency
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
@@ -737,8 +789,15 @@ app.delete("/api/diagrams/:id", async (c) => {
       return notFoundResponse(c, "Diagram", id);
     }
 
+    // Audit log the deletion
+    audit("diagram.delete", user, id, {
+      name: existing.name,
+      project: existing.project,
+    }, getAuditContext(c.req.raw));
+
     return operationResponse(c, true);
   } catch (err) {
+    if (err instanceof PermissionDeniedError) throw err;
     console.error("DELETE /api/diagrams/:id error:", err);
     return errorResponse(c, "DELETE_FAILED", "Failed to delete diagram", 500);
   }
@@ -754,13 +813,28 @@ app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
       return validationErrorResponse(c, "Thumbnail data URL required");
     }
 
-    if (!storage.getDiagram(id)) {
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
       return notFoundResponse(c, "Diagram", id);
     }
 
+    // Check write permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canWrite(user, ownership)) {
+      throw new PermissionDeniedError("write", id);
+    }
+
     const success = await storage.updateThumbnail(id, body.thumbnail);
+
+    // Audit log the thumbnail update (only on success)
+    if (success) {
+      audit("diagram.thumbnail_update", user, id, {}, getAuditContext(c.req.raw));
+    }
+
     return operationResponse(c, success);
   } catch (err) {
+    if (err instanceof PermissionDeniedError) throw err;
     console.error("PUT /api/diagrams/:id/thumbnail error:", err);
     if (err instanceof SyntaxError) {
       return errorResponse(c, "INVALID_JSON", "Invalid JSON in request body", 400);
@@ -880,6 +954,13 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
+    // Check write permission (restore is a form of update)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canWrite(user, ownership)) {
+      throw new PermissionDeniedError("write", id);
+    }
+
     const targetVersion = storage.getVersion(id, versionNum);
     if (!targetVersion) {
       throw new APIError("VERSION_NOT_FOUND", `Version ${versionNum} not found`, 404);
@@ -890,6 +971,13 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
       throw new APIError("RESTORE_FAILED", "Failed to restore version", 500);
     }
 
+    // Audit log the restore
+    audit("diagram.restore", user, id, {
+      restoredToVersion: versionNum,
+      previousVersion: diagram.version,
+      newVersion: restored.version,
+    }, getAuditContext(c.req.raw));
+
     console.log(`[versioning] Restored diagram ${id} to version ${versionNum}`);
     return c.json({
       success: true,
@@ -898,6 +986,7 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     console.error("POST /api/diagrams/:id/restore/:version error:", err);
     throw new APIError("RESTORE_FAILED", "Failed to restore version", 500);
   }
@@ -991,6 +1080,13 @@ app.post("/api/diagrams/:id/fork", async (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
+    // Check read permission on original (need to read to fork)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(original);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
+    }
+
     const newName = body.name || `${original.name} (fork)`;
     const project = body.project || original.project;
 
@@ -998,6 +1094,14 @@ app.post("/api/diagrams/:id/fork", async (c) => {
     if (!forked) {
       throw new APIError("FORK_FAILED", "Failed to fork diagram", 500);
     }
+
+    // Audit log the fork
+    audit("diagram.fork", user, forked.id, {
+      originalId: id,
+      originalName: original.name,
+      newName: forked.name,
+      project: forked.project,
+    }, getAuditContext(c.req.raw));
 
     console.log(`[versioning] Forked diagram ${id} -> ${forked.id}`);
     return c.json({
@@ -1007,6 +1111,7 @@ app.post("/api/diagrams/:id/fork", async (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     console.error("POST /api/diagrams/:id/fork error:", err);
     if (err instanceof SyntaxError) {
       throw new APIError("INVALID_JSON", "Invalid JSON in request body", 400);
@@ -1183,6 +1288,63 @@ app.post("/api/performance/clear-cache", rateLimiters.admin, (c) => {
   } catch (err) {
     console.error("POST /api/performance/clear-cache error:", err);
     return errorResponse(c, "CACHE_CLEAR_FAILED", "Failed to clear cache", 500);
+  }
+});
+
+// ==================== Audit Log Endpoints ====================
+
+// Get audit log (admin only)
+app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
+  try {
+    const user = getCurrentUser(c);
+
+    // Only admins can view audit log
+    if (user?.role !== "admin") {
+      return errorResponse(c, "FORBIDDEN", "Admin access required", 403);
+    }
+
+    const limitParam = c.req.query("limit");
+    const userId = c.req.query("userId");
+    const action = c.req.query("action");
+    const resourceId = c.req.query("resourceId");
+    const sinceParam = c.req.query("since");
+
+    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
+    const since = sinceParam ? new Date(sinceParam) : undefined;
+
+    const entries = getAuditLog({
+      limit,
+      userId: userId || undefined,
+      action: action as any,
+      resourceId: resourceId || undefined,
+      since,
+    });
+
+    return c.json({
+      entries,
+      count: entries.length,
+    });
+  } catch (err) {
+    console.error("GET /api/audit error:", err);
+    return errorResponse(c, "AUDIT_FAILED", "Failed to get audit log", 500);
+  }
+});
+
+// Get audit stats (admin only)
+app.get("/api/audit/stats", rateLimiters.admin, requireAuth(), (c) => {
+  try {
+    const user = getCurrentUser(c);
+
+    // Only admins can view audit stats
+    if (user?.role !== "admin") {
+      return errorResponse(c, "FORBIDDEN", "Admin access required", 403);
+    }
+
+    const stats = getAuditStats();
+    return c.json(stats);
+  } catch (err) {
+    console.error("GET /api/audit/stats error:", err);
+    return errorResponse(c, "AUDIT_STATS_FAILED", "Failed to get audit stats", 500);
   }
 });
 
@@ -1406,6 +1568,13 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
       throw new APIError("DIAGRAM_NOT_FOUND", "Diagram not found", 404);
     }
 
+    // Check write permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canWrite(user, ownership)) {
+      throw new PermissionDeniedError("write", id);
+    }
+
     const options: LayoutOptions = {
       algorithm: body.algorithm,
       direction: body.direction,
@@ -1444,6 +1613,13 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
 
     const updated = updateResult;
 
+    // Audit log the layout application
+    audit("diagram.apply_layout", user, id, {
+      algorithm: body.algorithm,
+      direction: body.direction,
+      duration: result.duration,
+    }, getAuditContext(c.req.raw));
+
     // Broadcast to collaborators
     broadcastDiagramSync(id, result.spec!);
 
@@ -1454,6 +1630,7 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     if (err instanceof TimeoutError) {
       throw new APIError("LAYOUT_TIMEOUT", err.message, 504);
     }
@@ -1525,6 +1702,13 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
       return notFoundResponse(c, "Diagram", id);
     }
 
+    // Check write permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canWrite(user, ownership)) {
+      throw new PermissionDeniedError("write", id);
+    }
+
     const themeId = body.themeId;
 
     // Invalidate cache BEFORE update for stronger consistency
@@ -1554,6 +1738,11 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
     const themedSpec = updateResult.spec;
     const updated = updateResult;
 
+    // Audit log the theme application
+    audit("diagram.apply_theme", user, id, {
+      themeId,
+    }, getAuditContext(c.req.raw));
+
     // Broadcast to collaborators
     broadcastDiagramSync(id, themedSpec);
 
@@ -1562,6 +1751,7 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
       diagram: updated,
     });
   } catch (err) {
+    if (err instanceof PermissionDeniedError) throw err;
     console.error("POST /api/diagrams/:id/apply-theme error:", err);
     return errorResponse(c, "THEME_APPLY_FAILED", "Failed to apply theme", 500);
   }
@@ -1576,6 +1766,13 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
     const diagram = storage.getDiagram(diagramId);
     if (!diagram) {
       return notFoundResponse(c, "Diagram", diagramId);
+    }
+
+    // Check write permission (running agent modifies diagram)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canWrite(user, ownership)) {
+      throw new PermissionDeniedError("write", diagramId);
     }
 
     const agent = await getAgent(agentId);
@@ -1620,6 +1817,14 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
 
       const updated = updateResult;
 
+      // Audit log the agent run
+      audit("diagram.run_agent", user, diagramId, {
+        agentId,
+        agentName: agent.name,
+        agentType: agent.type,
+        changesCount: result.changes?.length ?? 0,
+      }, getAuditContext(c.req.raw));
+
       // Broadcast to collaborators
       broadcastDiagramSync(diagramId, result.spec);
 
@@ -1637,6 +1842,7 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
       400
     );
   } catch (err) {
+    if (err instanceof PermissionDeniedError) throw err;
     if (err instanceof TimeoutError) {
       // 504 Gateway Timeout - need to handle manually as it's not in standard helpers
       return c.json({
@@ -1894,15 +2100,16 @@ Bun.serve({
   async fetch(req, server) {
     const url = new URL(req.url);
 
-    // Handle WebSocket upgrade for collaboration
+    // Handle WebSocket upgrade for collaboration with authentication
     if (url.pathname === "/ws/collab") {
-      const upgraded = server.upgrade(req, {
-        data: { participantId: null },
-      });
-      if (upgraded) {
-        return undefined;
+      // Use the authenticated WebSocket upgrade handler
+      const response = await handleWebSocketUpgrade(req, server as any);
+      if (response) {
+        // Returns a response only on error (e.g., invalid token)
+        return response;
       }
-      return new Response("WebSocket upgrade failed", { status: 500 });
+      // Successful upgrade returns undefined
+      return undefined;
     }
 
     if (url.pathname.startsWith("/api")) {
