@@ -7,12 +7,101 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { nanoid } from "nanoid";
 import { protectedStorage as storage } from "./storage/protected-storage";
 import type { DiagramSpec, DiagramChange } from "./types";
 import { sanitizeFilename, createSafeExportPath, validateExportPath } from "./utils/path-safety";
 
 const PORT = parseInt(process.env.PORT || "8420");
 const WEB_URL = process.env.WEB_URL || `http://localhost:3420`;
+
+// ==================== Error Handling ====================
+
+/**
+ * MCP Tool Result type
+ */
+interface MCPToolResult {
+  content: Array<{ type: string; text: string }>;
+}
+
+/**
+ * Structured error response for MCP tools
+ */
+interface MCPErrorResponse {
+  success: false;
+  error: string;
+  code: string;
+  requestId: string;
+  timestamp: string;
+  suggestion?: string;
+}
+
+/**
+ * Create a structured error response
+ */
+function createErrorResponse(
+  error: string,
+  code: string,
+  suggestion?: string
+): MCPToolResult {
+  const response: MCPErrorResponse = {
+    success: false,
+    error,
+    code,
+    requestId: nanoid(8),
+    timestamp: new Date().toISOString(),
+    ...(suggestion && { suggestion }),
+  };
+
+  return {
+    content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+  };
+}
+
+/**
+ * Wrap a tool handler with error boundary
+ * Catches all exceptions and returns structured error responses
+ */
+function withErrorBoundary<TArgs, TResult extends MCPToolResult>(
+  toolName: string,
+  handler: (args: TArgs) => Promise<TResult>
+): (args: TArgs) => Promise<TResult | MCPToolResult> {
+  return async (args: TArgs): Promise<TResult | MCPToolResult> => {
+    const startTime = Date.now();
+    try {
+      return await handler(args);
+    } catch (err) {
+      const duration = Date.now() - startTime;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      console.error(`[mcp] Tool "${toolName}" failed after ${duration}ms:`, err);
+
+      // Provide helpful suggestions based on error type
+      let suggestion: string | undefined;
+      let code = "TOOL_ERROR";
+
+      if (errorMessage.includes("ECONNREFUSED")) {
+        code = "CONNECTION_REFUSED";
+        suggestion = "Ensure the web server is running with: bun run web:dev";
+      } else if (errorMessage.includes("ENOENT")) {
+        code = "FILE_NOT_FOUND";
+        suggestion = "Check that the file path exists and is accessible";
+      } else if (errorMessage.includes("database")) {
+        code = "DATABASE_ERROR";
+        suggestion = "Database may be locked or corrupted. Try restarting the server.";
+      } else if (errorMessage.includes("timeout")) {
+        code = "TIMEOUT";
+        suggestion = "Operation took too long. Try with smaller data or check server load.";
+      }
+
+      return createErrorResponse(
+        `Tool "${toolName}" failed: ${errorMessage}`,
+        code,
+        suggestion
+      );
+    }
+  };
+}
 
 // Create MCP server
 const server = new McpServer({
@@ -46,6 +135,85 @@ const DiagramSpecSchema = z.object({
   edges: z.array(DiagramEdgeSchema),
 });
 
+// ==================== Health Check Tool ====================
+
+// Tool: health_check
+server.tool(
+  "health_check",
+  "Check MCP server health and connectivity",
+  {},
+  async () => {
+    const startTime = Date.now();
+    const checks: Record<string, { status: string; latencyMs?: number; error?: string }> = {};
+
+    // Check database
+    try {
+      const dbStart = Date.now();
+      const stats = storage.getStats();
+      checks.database = {
+        status: "ok",
+        latencyMs: Date.now() - dbStart,
+      };
+    } catch (err) {
+      checks.database = {
+        status: "error",
+        error: err instanceof Error ? err.message : "Database check failed",
+      };
+    }
+
+    // Check web server connectivity
+    try {
+      const webStart = Date.now();
+      const response = await fetch(`${WEB_URL}/api/health`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      checks.webServer = {
+        status: response.ok ? "ok" : "degraded",
+        latencyMs: Date.now() - webStart,
+      };
+    } catch (err) {
+      checks.webServer = {
+        status: "unreachable",
+        error: err instanceof Error ? err.message : "Web server not reachable",
+      };
+    }
+
+    // Determine overall status
+    const hasError = Object.values(checks).some((c) => c.status === "error");
+    const hasDegraded = Object.values(checks).some((c) =>
+      c.status === "degraded" || c.status === "unreachable"
+    );
+
+    const status = hasError ? "unhealthy" : hasDegraded ? "degraded" : "healthy";
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            {
+              success: true,
+              status,
+              timestamp: new Date().toISOString(),
+              totalLatencyMs: Date.now() - startTime,
+              checks,
+              server: {
+                name: "vizcraft",
+                version: "0.1.0",
+                webUrl: WEB_URL,
+              },
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
+// ==================== Diagram Tools ====================
+
 // Tool: create_diagram
 server.tool(
   "create_diagram",
@@ -55,7 +223,7 @@ server.tool(
     project: z.string().optional().describe("Project name (defaults to 'default')"),
     spec: DiagramSpecSchema.describe("Diagram specification with nodes and edges"),
   },
-  async ({ name, project, spec }) => {
+  withErrorBoundary("create_diagram", async ({ name, project, spec }) => {
     const diagram = storage.createDiagram(name, project || "default", spec as DiagramSpec);
 
     return {
@@ -78,7 +246,7 @@ server.tool(
         },
       ],
     };
-  }
+  })
 );
 
 // Tool: update_diagram
@@ -90,7 +258,7 @@ server.tool(
     spec: DiagramSpecSchema.optional().describe("Complete new spec (replaces existing)"),
     message: z.string().optional().describe("Version message"),
   },
-  async ({ id, spec, message }) => {
+  withErrorBoundary("update_diagram", async ({ id, spec, message }) => {
     const existing = storage.getDiagram(id);
     if (!existing) {
       return {
@@ -118,7 +286,7 @@ server.tool(
         },
       ],
     };
-  }
+  })
 );
 
 // Tool: describe_diagram
@@ -128,7 +296,7 @@ server.tool(
   {
     id: z.string().describe("Diagram ID"),
   },
-  async ({ id }) => {
+  withErrorBoundary("describe_diagram", async ({ id }) => {
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       return {
@@ -165,7 +333,7 @@ server.tool(
     return {
       content: [{ type: "text", text: JSON.stringify(description, null, 2) }],
     };
-  }
+  })
 );
 
 // Tool: list_diagrams
@@ -175,7 +343,7 @@ server.tool(
   {
     project: z.string().optional().describe("Filter by project name"),
   },
-  async ({ project }) => {
+  withErrorBoundary("list_diagrams", async ({ project }) => {
     const diagrams = storage.listDiagrams(project);
 
     const list = diagrams.map((d) => ({
@@ -204,7 +372,7 @@ server.tool(
         },
       ],
     };
-  }
+  })
 );
 
 // Tool: delete_diagram
@@ -214,7 +382,7 @@ server.tool(
   {
     id: z.string().describe("Diagram ID to delete"),
   },
-  async ({ id }) => {
+  withErrorBoundary("delete_diagram", async ({ id }) => {
     const deleted = await storage.deleteDiagram(id);
 
     return {
@@ -225,7 +393,7 @@ server.tool(
         },
       ],
     };
-  }
+  })
 );
 
 // Tool: export_diagram
@@ -237,7 +405,7 @@ server.tool(
     format: z.enum(["json", "png", "svg", "pdf"]).default("json").describe("Export format"),
     path: z.string().optional().describe("Output path (defaults to ./data/exports/)"),
   },
-  async ({ id, format, path }) => {
+  withErrorBoundary("export_diagram", async ({ id, format, path }) => {
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       return {
@@ -366,7 +534,7 @@ server.tool(
     return {
       content: [{ type: "text", text: JSON.stringify({ success: false, error: `Unknown format: ${format}` }) }],
     };
-  }
+  })
 );
 
 // Resource: diagram context for "Send to Claude"
