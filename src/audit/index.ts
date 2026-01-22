@@ -88,8 +88,8 @@ export function audit(
     userAgent: context?.userAgent,
   };
 
-  // Log using structured logger
-  log.info("audit_event", entry);
+  // Log using structured logger (spread to satisfy LogMetadata index signature)
+  log.info("audit_event", { ...entry });
 
   // Queue for persistence (async batch write to SQLite)
   queueAuditEntry(entry);
