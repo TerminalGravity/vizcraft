@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import {
   responseCompression,
   shouldCompress,
+  isIncompressible,
   getCompressionStats,
   DEFAULT_COMPRESSION_CONFIG,
 } from "./response-compression";
@@ -35,10 +36,25 @@ describe("Response Compression", () => {
 
     it("returns false for images (non-SVG)", () => {
       expect(shouldCompress("image/png", 10000, "gzip")).toBe(false);
+      expect(shouldCompress("image/jpeg", 10000, "gzip")).toBe(false);
+      expect(shouldCompress("image/webp", 10000, "gzip")).toBe(false);
+      expect(shouldCompress("image/gif", 10000, "gzip")).toBe(false);
     });
 
     it("returns false for already-compressed types", () => {
       expect(shouldCompress("application/gzip", 2000, "gzip")).toBe(false);
+      expect(shouldCompress("application/zip", 2000, "gzip")).toBe(false);
+      expect(shouldCompress("application/pdf", 2000, "gzip")).toBe(false);
+    });
+
+    it("returns false for compressed fonts", () => {
+      expect(shouldCompress("font/woff2", 2000, "gzip")).toBe(false);
+      expect(shouldCompress("font/woff", 2000, "gzip")).toBe(false);
+    });
+
+    it("returns false for compressed audio/video", () => {
+      expect(shouldCompress("video/mp4", 100000, "gzip")).toBe(false);
+      expect(shouldCompress("audio/mpeg", 50000, "gzip")).toBe(false);
     });
 
     it("returns false below threshold", () => {
@@ -71,6 +87,54 @@ describe("Response Compression", () => {
     });
   });
 
+  describe("isIncompressible", () => {
+    it("returns true for already-compressed images", () => {
+      expect(isIncompressible("image/png")).toBe(true);
+      expect(isIncompressible("image/jpeg")).toBe(true);
+      expect(isIncompressible("image/webp")).toBe(true);
+      expect(isIncompressible("image/gif")).toBe(true);
+      expect(isIncompressible("image/avif")).toBe(true);
+    });
+
+    it("returns false for SVG (text-based)", () => {
+      expect(isIncompressible("image/svg+xml")).toBe(false);
+    });
+
+    it("returns true for compressed archives", () => {
+      expect(isIncompressible("application/zip")).toBe(true);
+      expect(isIncompressible("application/gzip")).toBe(true);
+      expect(isIncompressible("application/x-7z-compressed")).toBe(true);
+    });
+
+    it("returns true for compressed documents", () => {
+      expect(isIncompressible("application/pdf")).toBe(true);
+    });
+
+    it("returns true for compressed fonts", () => {
+      expect(isIncompressible("font/woff")).toBe(true);
+      expect(isIncompressible("font/woff2")).toBe(true);
+    });
+
+    it("returns true for compressed media", () => {
+      expect(isIncompressible("video/mp4")).toBe(true);
+      expect(isIncompressible("audio/mpeg")).toBe(true);
+    });
+
+    it("returns false for text-based content", () => {
+      expect(isIncompressible("application/json")).toBe(false);
+      expect(isIncompressible("text/plain")).toBe(false);
+      expect(isIncompressible("text/html")).toBe(false);
+    });
+
+    it("returns false for null", () => {
+      expect(isIncompressible(null)).toBe(false);
+    });
+
+    it("handles content type with charset", () => {
+      expect(isIncompressible("image/png; charset=utf-8")).toBe(true);
+    });
+  });
+
   describe("DEFAULT_COMPRESSION_CONFIG", () => {
     it("has 1KB threshold", () => {
       expect(DEFAULT_COMPRESSION_CONFIG.threshold).toBe(1024);
@@ -95,6 +159,14 @@ describe("Response Compression", () => {
       expect(stats.compressibleTypes).toContain("text/plain");
       expect(stats.compressibleTypes).toContain("text/html");
       expect(stats.compressibleTypes).toContain("image/svg+xml");
+    });
+
+    it("lists all incompressible types", () => {
+      const stats = getCompressionStats();
+      expect(stats.incompressibleTypes).toContain("image/png");
+      expect(stats.incompressibleTypes).toContain("image/jpeg");
+      expect(stats.incompressibleTypes).toContain("application/pdf");
+      expect(stats.incompressibleTypes).toContain("font/woff2");
     });
   });
 
