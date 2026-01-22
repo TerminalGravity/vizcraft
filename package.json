@@ -1,0 +1,33 @@
+{
+  "name": "vizcraft",
+  "version": "0.1.0",
+  "description": "AI-Native Diagramming for Claude Code",
+  "module": "src/server.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/server.ts",
+    "start": "bun run src/server.ts",
+    "web": "bun run src/web-server.ts",
+    "web:dev": "bun run --watch src/web-server.ts",
+    "web:build": "bun build web/app.tsx --outdir web/dist --target browser",
+    "test": "bun test",
+    "build": "bun build src/server.ts --outdir dist --target bun"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "@tldraw/tldraw": "^4.3.0",
+    "hono": "^4.11.5",
+    "nanoid": "^5.1.6",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "tldraw": "^4.3.0",
+    "zod": "^4.3.5"
+  }
+}

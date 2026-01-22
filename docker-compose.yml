@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  vizcraft:
+    build: .
+    container_name: vizcraft-mcp
+    volumes:
+      - vizcraft-data:/app/data
+    environment:
+      - DATA_DIR=/app/data
+      - WEB_URL=http://localhost:3420
+    # MCP uses stdio, so no ports needed for the server itself
+    # Uncomment when web UI is added:
+    # ports:
+    #   - "3420:3420"
+    restart: unless-stopped
+
+volumes:
+  vizcraft-data:

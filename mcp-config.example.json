@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vizcraft": {
+      "command": "bun",
+      "args": ["run", "/path/to/vizcraft/src/server.ts"],
+      "env": {
+        "DATA_DIR": "./data",
+        "WEB_URL": "http://localhost:3420"
+      }
+    }
+  }
+}
