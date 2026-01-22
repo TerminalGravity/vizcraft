@@ -97,6 +97,85 @@ describe("Permissions", () => {
 
       expect(getEffectivePermission(null, ownership)).toBe("none");
     });
+
+    it("restricts viewer-role users to viewer permission on their own diagrams", () => {
+      // A user with "viewer" role should only get viewer permission,
+      // even on diagrams they own - the role acts as a ceiling
+      const viewerUser = createUser("user-1", "viewer");
+      const ownership: DiagramOwnership = {
+        ownerId: "user-1",  // Same as user - they own it
+        isPublic: false,
+      };
+
+      expect(getEffectivePermission(viewerUser, ownership)).toBe("viewer");
+    });
+
+    it("allows viewer-role users to read their own diagrams", () => {
+      const viewerUser = createUser("user-1", "viewer");
+      const ownership: DiagramOwnership = {
+        ownerId: "user-1",
+        isPublic: false,
+      };
+
+      const permission = getEffectivePermission(viewerUser, ownership);
+      expect(canRead(permission)).toBe(true);
+    });
+
+    it("prevents viewer-role users from writing to their own diagrams", () => {
+      const viewerUser = createUser("user-1", "viewer");
+      const ownership: DiagramOwnership = {
+        ownerId: "user-1",
+        isPublic: false,
+      };
+
+      const permission = getEffectivePermission(viewerUser, ownership);
+      expect(canWrite(permission)).toBe(false);
+    });
+
+    it("prevents viewer-role users from deleting their own diagrams", () => {
+      const viewerUser = createUser("user-1", "viewer");
+      const ownership: DiagramOwnership = {
+        ownerId: "user-1",
+        isPublic: false,
+      };
+
+      const permission = getEffectivePermission(viewerUser, ownership);
+      expect(canDelete(permission)).toBe(false);
+    });
+
+    it("grants editor permission to authenticated users for anonymous-owned public diagrams", () => {
+      // Diagrams with ownerId=null and isPublic=true are editable by any authenticated user
+      // This enables collaborative editing of orphaned diagrams
+      const user = createUser("any-user");
+      const ownership: DiagramOwnership = {
+        ownerId: null,  // Anonymous/orphaned diagram
+        isPublic: true,
+      };
+
+      expect(getEffectivePermission(user, ownership)).toBe("editor");
+    });
+
+    it("grants only viewer permission to anonymous users for anonymous-owned public diagrams", () => {
+      const ownership: DiagramOwnership = {
+        ownerId: null,
+        isPublic: true,
+      };
+
+      // Unauthenticated users can view but not edit
+      expect(getEffectivePermission(null, ownership)).toBe("viewer");
+    });
+
+    it("denies all access to anonymous-owned private diagrams", () => {
+      // This is an edge case - a diagram with no owner and not public
+      const user = createUser("any-user");
+      const ownership: DiagramOwnership = {
+        ownerId: null,
+        isPublic: false,
+      };
+
+      expect(getEffectivePermission(user, ownership)).toBe("none");
+      expect(getEffectivePermission(null, ownership)).toBe("none");
+    });
   });
 
   describe("permission checks", () => {
@@ -167,6 +246,66 @@ describe("Permissions", () => {
     });
   });
 
+  describe("two-argument overloads", () => {
+    // Test that canRead(user, ownership) works as a convenience function
+    const testOwnership: DiagramOwnership = {
+      ownerId: "user-1",
+      isPublic: false,
+    };
+
+    it("canRead(user, ownership) computes permission correctly", () => {
+      const owner = createUser("user-1");
+      const other = createUser("user-2");
+
+      expect(canRead(owner, testOwnership)).toBe(true);  // Owner can read
+      expect(canRead(other, testOwnership)).toBe(false); // Non-owner cannot read private
+    });
+
+    it("canWrite(user, ownership) computes permission correctly", () => {
+      const owner = createUser("user-1");
+      const other = createUser("user-2");
+
+      expect(canWrite(owner, testOwnership)).toBe(true);  // Owner can write
+      expect(canWrite(other, testOwnership)).toBe(false); // Non-owner cannot write
+    });
+
+    it("canDelete(user, ownership) computes permission correctly", () => {
+      const owner = createUser("user-1");
+      const editor = createUser("user-2");
+      const ownershipWithEditor: DiagramOwnership = {
+        ...testOwnership,
+        shares: new Map([["user-2", "editor"]]),
+      };
+
+      expect(canDelete(owner, ownershipWithEditor)).toBe(true);   // Owner can delete
+      expect(canDelete(editor, ownershipWithEditor)).toBe(false); // Editor cannot delete
+    });
+
+    it("canShare(user, ownership) computes permission correctly", () => {
+      const owner = createUser("user-1");
+      const admin = createUser("admin-1", "admin");
+      const editor = createUser("user-2");
+      const ownershipWithEditor: DiagramOwnership = {
+        ...testOwnership,
+        shares: new Map([["user-2", "editor"]]),
+      };
+
+      expect(canShare(owner, ownershipWithEditor)).toBe(true);   // Owner can share
+      expect(canShare(admin, ownershipWithEditor)).toBe(true);   // Admin can share (owner permission)
+      expect(canShare(editor, ownershipWithEditor)).toBe(false); // Editor cannot share
+    });
+
+    it("works with null user for anonymous access", () => {
+      const publicOwnership: DiagramOwnership = {
+        ownerId: "user-1",
+        isPublic: true,
+      };
+
+      expect(canRead(null, publicOwnership)).toBe(true);   // Anonymous can read public
+      expect(canWrite(null, publicOwnership)).toBe(false); // Anonymous cannot write
+    });
+  });
+
   describe("createOwnership", () => {
     it("creates ownership with user ID", () => {
       const ownership = createOwnership("user-123");
@@ -225,6 +364,88 @@ describe("Permissions", () => {
       expect(ownership.shares?.size).toBe(1);
       expect(ownership.shares?.get("user-2")).toBe("viewer");
     });
+
+    it("parses ownership from Diagram object", () => {
+      const diagram = {
+        id: "diagram-123",
+        name: "Test Diagram",
+        spec: { type: "flowchart" as const, nodes: [], edges: [] },
+        ownerId: "user-456",
+        isPublic: true,
+        shares: [
+          { userId: "user-789", permission: "editor" as const },
+          { userId: "user-abc", permission: "viewer" as const },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const ownership = parseOwnership(diagram);
+
+      expect(ownership.ownerId).toBe("user-456");
+      expect(ownership.isPublic).toBe(true);
+      expect(ownership.shares?.get("user-789")).toBe("editor");
+      expect(ownership.shares?.get("user-abc")).toBe("viewer");
+    });
+
+    it("handles Diagram with no shares", () => {
+      const diagram = {
+        id: "diagram-123",
+        name: "Test Diagram",
+        spec: { type: "flowchart" as const, nodes: [], edges: [] },
+        ownerId: "user-456",
+        isPublic: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const ownership = parseOwnership(diagram);
+
+      expect(ownership.ownerId).toBe("user-456");
+      expect(ownership.isPublic).toBe(false);
+      expect(ownership.shares?.size).toBe(0);
+    });
+
+    it("handles Diagram with undefined ownerId", () => {
+      const diagram = {
+        id: "diagram-123",
+        name: "Test Diagram",
+        spec: { type: "flowchart" as const, nodes: [], edges: [] },
+        ownerId: undefined,
+        isPublic: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const ownership = parseOwnership(diagram);
+
+      expect(ownership.ownerId).toBeNull();
+    });
+
+    it("filters invalid share permissions from Diagram object", () => {
+      const diagram = {
+        id: "diagram-123",
+        name: "Test Diagram",
+        spec: { type: "flowchart" as const, nodes: [], edges: [] },
+        ownerId: "user-1",
+        isPublic: false,
+        shares: [
+          { userId: "user-2", permission: "editor" as const },
+          { userId: "user-3", permission: "owner" as any }, // Invalid - should be filtered
+          { userId: "user-4", permission: "viewer" as const },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const ownership = parseOwnership(diagram);
+
+      // "owner" is not a valid share permission, should be filtered
+      expect(ownership.shares?.size).toBe(2);
+      expect(ownership.shares?.has("user-2")).toBe(true);
+      expect(ownership.shares?.has("user-3")).toBe(false);
+      expect(ownership.shares?.has("user-4")).toBe(true);
+    });
   });
 
   describe("serializeShares", () => {
@@ -275,6 +496,35 @@ describe("Permissions", () => {
         expect(permError.code).toBe("PERMISSION_DENIED");
         expect(permError.statusCode).toBe(403);
       }
+    });
+  });
+
+  describe("PermissionDeniedError", () => {
+    it("supports three-argument constructor", () => {
+      const error = new PermissionDeniedError("delete", "diagram", "diag-123");
+
+      expect(error.action).toBe("delete");
+      expect(error.resourceType).toBe("diagram");
+      expect(error.resourceId).toBe("diag-123");
+      expect(error.message).toContain("cannot delete diagram diag-123");
+    });
+
+    it("supports two-argument constructor (defaults to diagram)", () => {
+      // Convenience form: new PermissionDeniedError(action, diagramId)
+      const error = new PermissionDeniedError("write", "diag-456");
+
+      expect(error.action).toBe("write");
+      expect(error.resourceType).toBe("diagram");
+      expect(error.resourceId).toBe("diag-456");
+      expect(error.message).toContain("cannot write diagram diag-456");
+    });
+
+    it("has correct code and statusCode", () => {
+      const error = new PermissionDeniedError("share", "test-id");
+
+      expect(error.code).toBe("PERMISSION_DENIED");
+      expect(error.statusCode).toBe(403);
+      expect(error.name).toBe("PermissionDeniedError");
     });
   });
 });
