@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { storage } from "./storage/db";
 import { loadAgents, getAgent } from "./agents/loader";
+import { runAgent } from "./agents/runner";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -96,6 +97,35 @@ app.get("/api/agents/:id", async (c) => {
   const agent = await getAgent(id);
   if (!agent) return c.json({ error: "Agent not found" }, 404);
   return c.json(agent);
+});
+
+// Run agent on diagram
+app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
+  const diagramId = c.req.param("diagramId");
+  const agentId = c.req.param("agentId");
+
+  const diagram = storage.getDiagram(diagramId);
+  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
+
+  const agent = await getAgent(agentId);
+  if (!agent) return c.json({ error: "Agent not found" }, 404);
+
+  const result = await runAgent(agent, diagram.spec);
+
+  if (result.success && result.spec) {
+    // Update the diagram with the new spec
+    const updated = storage.updateDiagram(diagramId, result.spec, `Agent: ${agent.name}`);
+    return c.json({
+      success: true,
+      changes: result.changes,
+      diagram: updated,
+    });
+  }
+
+  return c.json({
+    success: false,
+    error: result.error,
+  }, 400);
 });
 
 // Export diagram as SVG (server-side generation)

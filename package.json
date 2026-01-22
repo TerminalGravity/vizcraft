@@ -21,6 +21,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^1.1.8",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@tldraw/tldraw": "^4.3.0",
     "hono": "^4.11.5",
