@@ -183,6 +183,77 @@ export const storage = {
     }));
   },
 
+  getVersion(diagramId: string, version: number): DiagramVersion | null {
+    const row = db.query<{ id: string; diagram_id: string; version: number; spec: string; message: string | null; created_at: string }, [string, number]>(
+      `SELECT * FROM diagram_versions WHERE diagram_id = ? AND version = ?`
+    ).get(diagramId, version);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      diagramId: row.diagram_id,
+      version: row.version,
+      spec: JSON.parse(row.spec),
+      message: row.message || undefined,
+      createdAt: row.created_at,
+    };
+  },
+
+  getLatestVersion(diagramId: string): DiagramVersion | null {
+    const row = db.query<{ id: string; diagram_id: string; version: number; spec: string; message: string | null; created_at: string }, [string]>(
+      `SELECT * FROM diagram_versions WHERE diagram_id = ? ORDER BY version DESC LIMIT 1`
+    ).get(diagramId);
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      diagramId: row.diagram_id,
+      version: row.version,
+      spec: JSON.parse(row.spec),
+      message: row.message || undefined,
+      createdAt: row.created_at,
+    };
+  },
+
+  restoreVersion(diagramId: string, version: number): Diagram | null {
+    const targetVersion = this.getVersion(diagramId, version);
+    if (!targetVersion) return null;
+
+    const now = new Date().toISOString();
+
+    // Update diagram to the old version's spec
+    db.run(
+      `UPDATE diagrams SET spec = ?, updated_at = ? WHERE id = ?`,
+      [JSON.stringify(targetVersion.spec), now, diagramId]
+    );
+
+    // Create a new version recording the restore
+    this.createVersion(diagramId, targetVersion.spec, `Restored to version ${version}`);
+
+    return this.getDiagram(diagramId);
+  },
+
+  forkDiagram(id: string, newName: string, project?: string): Diagram | null {
+    const original = this.getDiagram(id);
+    if (!original) return null;
+
+    const newId = nanoid(12);
+    const now = new Date().toISOString();
+    const targetProject = project || original.project;
+
+    db.run(
+      `INSERT INTO diagrams (id, name, project, spec, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [newId, newName, targetProject, JSON.stringify(original.spec), now, now]
+    );
+
+    // Create initial version with fork reference
+    this.createVersion(newId, original.spec, `Forked from ${original.name} (${id})`);
+
+    return this.getDiagram(newId);
+  },
+
   // Thumbnails
   updateThumbnail(id: string, thumbnailDataUrl: string): boolean {
     const result = db.run(

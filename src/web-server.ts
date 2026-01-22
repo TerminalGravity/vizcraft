@@ -12,6 +12,7 @@ import { runAgent } from "./agents/runner";
 import { getProviderRegistry, listConfiguredProviders } from "./llm";
 import { listThemes, getTheme, generateStyledCSS, applyThemeToDiagram } from "./styling";
 import { layoutDiagram, listLayoutAlgorithms, type LayoutOptions, type LayoutAlgorithm } from "./layout";
+import { diffSpecs, generateChangelog, type DiagramDiff } from "./versioning";
 import type { DiagramSpec } from "./types";
 import { join, extname } from "path";
 
@@ -227,6 +228,255 @@ app.get("/api/diagrams/:id/versions", (c) => {
   } catch (err) {
     if (err instanceof APIError) throw err;
     throw new APIError("VERSIONS_FAILED", "Failed to get diagram versions", 500);
+  }
+});
+
+// Get specific version
+app.get("/api/diagrams/:id/versions/:version", (c) => {
+  try {
+    const id = c.req.param("id");
+    const versionParam = c.req.param("version");
+
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+    if (!versionParam?.trim()) {
+      throw new APIError("INVALID_VERSION", "Version number is required", 400);
+    }
+
+    const versionNum = parseInt(versionParam, 10);
+    if (isNaN(versionNum) || versionNum < 1) {
+      throw new APIError("INVALID_VERSION", "Version must be a positive integer", 400);
+    }
+
+    if (!storage.getDiagram(id)) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const version = storage.getVersion(id, versionNum);
+    if (!version) {
+      throw new APIError("VERSION_NOT_FOUND", `Version ${versionNum} not found`, 404);
+    }
+
+    return c.json(version);
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("VERSION_GET_FAILED", "Failed to get version", 500);
+  }
+});
+
+// Restore to specific version
+app.post("/api/diagrams/:id/restore/:version", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const versionParam = c.req.param("version");
+
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+    if (!versionParam?.trim()) {
+      throw new APIError("INVALID_VERSION", "Version number is required", 400);
+    }
+
+    const versionNum = parseInt(versionParam, 10);
+    if (isNaN(versionNum) || versionNum < 1) {
+      throw new APIError("INVALID_VERSION", "Version must be a positive integer", 400);
+    }
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const targetVersion = storage.getVersion(id, versionNum);
+    if (!targetVersion) {
+      throw new APIError("VERSION_NOT_FOUND", `Version ${versionNum} not found`, 404);
+    }
+
+    const restored = storage.restoreVersion(id, versionNum);
+    if (!restored) {
+      throw new APIError("RESTORE_FAILED", "Failed to restore version", 500);
+    }
+
+    console.log(`[versioning] Restored diagram ${id} to version ${versionNum}`);
+    return c.json({
+      success: true,
+      diagram: restored,
+      message: `Restored to version ${versionNum}`,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("POST /api/diagrams/:id/restore/:version error:", err);
+    throw new APIError("RESTORE_FAILED", "Failed to restore version", 500);
+  }
+});
+
+// Diff between two versions
+app.get("/api/diagrams/:id/diff", (c) => {
+  try {
+    const id = c.req.param("id");
+    const v1Param = c.req.query("v1");
+    const v2Param = c.req.query("v2");
+
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    // Default: compare with latest if only v1 provided, or compare consecutive versions
+    let version1: ReturnType<typeof storage.getVersion>;
+    let version2: ReturnType<typeof storage.getVersion>;
+
+    if (v1Param && v2Param) {
+      const v1 = parseInt(v1Param, 10);
+      const v2 = parseInt(v2Param, 10);
+      if (isNaN(v1) || isNaN(v2) || v1 < 1 || v2 < 1) {
+        throw new APIError("INVALID_VERSION", "Version numbers must be positive integers", 400);
+      }
+      version1 = storage.getVersion(id, v1);
+      version2 = storage.getVersion(id, v2);
+    } else if (v1Param) {
+      // Compare v1 with current
+      const v1 = parseInt(v1Param, 10);
+      if (isNaN(v1) || v1 < 1) {
+        throw new APIError("INVALID_VERSION", "Version number must be a positive integer", 400);
+      }
+      version1 = storage.getVersion(id, v1);
+      version2 = storage.getLatestVersion(id);
+    } else {
+      // Compare last two versions
+      const versions = storage.getVersions(id);
+      if (versions.length < 2) {
+        return c.json({
+          hasChanges: false,
+          summary: "Only one version exists",
+          diff: null,
+        });
+      }
+      version2 = versions[0]; // Latest
+      version1 = versions[1]; // Previous
+    }
+
+    if (!version1) {
+      throw new APIError("VERSION_NOT_FOUND", "First version not found", 404);
+    }
+    if (!version2) {
+      throw new APIError("VERSION_NOT_FOUND", "Second version not found", 404);
+    }
+
+    const diff = diffSpecs(version1.spec, version2.spec);
+    const changelog = generateChangelog(diff);
+
+    return c.json({
+      v1: version1.version,
+      v2: version2.version,
+      diff,
+      changelog,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("GET /api/diagrams/:id/diff error:", err);
+    throw new APIError("DIFF_FAILED", "Failed to calculate diff", 500);
+  }
+});
+
+// Fork/branch a diagram
+app.post("/api/diagrams/:id/fork", async (c) => {
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+
+    const body = await c.req.json<{ name?: string; project?: string }>();
+
+    const original = storage.getDiagram(id);
+    if (!original) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const newName = body.name || `${original.name} (fork)`;
+    const project = body.project || original.project;
+
+    const forked = storage.forkDiagram(id, newName, project);
+    if (!forked) {
+      throw new APIError("FORK_FAILED", "Failed to fork diagram", 500);
+    }
+
+    console.log(`[versioning] Forked diagram ${id} -> ${forked.id}`);
+    return c.json({
+      success: true,
+      diagram: forked,
+      originalId: id,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("POST /api/diagrams/:id/fork error:", err);
+    if (err instanceof SyntaxError) {
+      throw new APIError("INVALID_JSON", "Invalid JSON in request body", 400);
+    }
+    throw new APIError("FORK_FAILED", "Failed to fork diagram", 500);
+  }
+});
+
+// Get version timeline with diffs (useful for history UI)
+app.get("/api/diagrams/:id/timeline", (c) => {
+  try {
+    const id = c.req.param("id");
+    const limitParam = c.req.query("limit");
+    const limit = limitParam ? parseInt(limitParam, 10) : 20;
+
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const versions = storage.getVersions(id).slice(0, limit);
+
+    // Calculate diff summaries for each version
+    const timeline = versions.map((version, i) => {
+      if (i === versions.length - 1) {
+        // First version - no diff
+        return {
+          version: version.version,
+          message: version.message,
+          createdAt: version.createdAt,
+          summary: "Initial version",
+          hasChanges: false,
+        };
+      }
+
+      const previousVersion = versions[i + 1];
+      const diff = diffSpecs(previousVersion.spec, version.spec);
+
+      return {
+        version: version.version,
+        message: version.message,
+        createdAt: version.createdAt,
+        summary: diff.summary,
+        hasChanges: diff.hasChanges,
+        stats: diff.stats,
+      };
+    });
+
+    return c.json({
+      diagramId: id,
+      diagramName: diagram.name,
+      timeline,
+      totalVersions: versions.length,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    console.error("GET /api/diagrams/:id/timeline error:", err);
+    throw new APIError("TIMELINE_FAILED", "Failed to get timeline", 500);
   }
 });
 
