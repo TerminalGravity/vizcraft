@@ -151,7 +151,8 @@ app.get("/api/diagrams", (c) => {
         ...(minimal
           ? { nodeCount: d.spec.nodes?.length ?? 0 }
           : { spec: d.spec }),
-        thumbnailUrl: d.thumbnailUrl,
+        // Return URL to thumbnail endpoint (client handles 404 for missing thumbnails)
+        thumbnailUrl: `/api/diagrams/${d.id}/thumbnail`,
         updatedAt: d.updatedAt,
       })),
       projects,
@@ -282,10 +283,11 @@ app.put("/api/diagrams/:id", async (c) => {
 });
 
 // Delete diagram
-app.delete("/api/diagrams/:id", (c) => {
+app.delete("/api/diagrams/:id", async (c) => {
   try {
     const id = c.req.param("id");
-    if (!storage.deleteDiagram(id)) {
+    const deleted = await storage.deleteDiagram(id);
+    if (!deleted) {
       return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
     }
 
@@ -300,7 +302,7 @@ app.delete("/api/diagrams/:id", (c) => {
   }
 });
 
-// Update diagram thumbnail
+// Update diagram thumbnail (saves to filesystem)
 app.put("/api/diagrams/:id/thumbnail", async (c) => {
   try {
     const id = c.req.param("id");
@@ -314,7 +316,7 @@ app.put("/api/diagrams/:id/thumbnail", async (c) => {
       return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
     }
 
-    const success = storage.updateThumbnail(id, body.thumbnail);
+    const success = await storage.updateThumbnail(id, body.thumbnail);
     return c.json({ success });
   } catch (err) {
     console.error("PUT /api/diagrams/:id/thumbnail error:", err);
@@ -322,6 +324,41 @@ app.put("/api/diagrams/:id/thumbnail", async (c) => {
       return c.json({ error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" }, 400);
     }
     return c.json({ error: true, message: "Failed to update thumbnail", code: "THUMBNAIL_FAILED" }, 500);
+  }
+});
+
+// Get diagram thumbnail (serves from filesystem)
+app.get("/api/diagrams/:id/thumbnail", async (c) => {
+  try {
+    const id = c.req.param("id");
+
+    // Check if diagram exists
+    if (!storage.getDiagram(id)) {
+      return c.json({ error: true, message: "Diagram not found", code: "NOT_FOUND" }, 404);
+    }
+
+    // Load thumbnail from filesystem
+    const dataUrl = await storage.loadThumbnail(id);
+    if (!dataUrl) {
+      return c.json({ error: true, message: "Thumbnail not found", code: "THUMBNAIL_NOT_FOUND" }, 404);
+    }
+
+    // Convert data URL to binary response for efficient caching
+    const matches = dataUrl.match(/^data:image\/([a-zA-Z]+);base64,(.+)$/);
+    if (!matches) {
+      return c.json({ error: true, message: "Invalid thumbnail data", code: "INVALID_THUMBNAIL" }, 500);
+    }
+
+    const buffer = Buffer.from(matches[2], "base64");
+    return new Response(buffer, {
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+      },
+    });
+  } catch (err) {
+    console.error("GET /api/diagrams/:id/thumbnail error:", err);
+    return c.json({ error: true, message: "Failed to load thumbnail", code: "THUMBNAIL_LOAD_FAILED" }, 500);
   }
 });
 

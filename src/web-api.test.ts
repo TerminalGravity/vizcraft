@@ -32,9 +32,9 @@ describe("Web API Integration", () => {
     diagramId = diagram.id;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     // Cleanup
-    storage.deleteDiagram(diagramId);
+    await storage.deleteDiagram(diagramId);
   });
 
   describe("Diagram CRUD", () => {
@@ -83,8 +83,8 @@ describe("Web API Integration", () => {
       expect(diagram).toBeNull();
     });
 
-    test("delete returns false for non-existent diagram", () => {
-      const result = storage.deleteDiagram("fake-id-12345");
+    test("delete returns false for non-existent diagram", async () => {
+      const result = await storage.deleteDiagram("fake-id-12345");
       expect(result).toBe(false);
     });
 
@@ -95,7 +95,7 @@ describe("Web API Integration", () => {
   });
 
   describe("Edge Cases", () => {
-    test("handles empty node/edge arrays", () => {
+    test("handles empty node/edge arrays", async () => {
       const emptySpec: DiagramSpec = {
         type: "freeform",
         nodes: [],
@@ -106,17 +106,17 @@ describe("Web API Integration", () => {
       expect(diagram.spec.nodes).toHaveLength(0);
       expect(diagram.spec.edges).toHaveLength(0);
 
-      storage.deleteDiagram(diagram.id);
+      await storage.deleteDiagram(diagram.id);
     });
 
-    test("handles special characters in names", () => {
+    test("handles special characters in names", async () => {
       const diagram = storage.createDiagram("Test & <Diagram> \"Quote\"", "api-tests", testSpec);
       expect(diagram.name).toBe("Test & <Diagram> \"Quote\"");
 
-      storage.deleteDiagram(diagram.id);
+      await storage.deleteDiagram(diagram.id);
     });
 
-    test("handles unicode in labels", () => {
+    test("handles unicode in labels", async () => {
       const unicodeSpec: DiagramSpec = {
         type: "flowchart",
         nodes: [
@@ -129,7 +129,7 @@ describe("Web API Integration", () => {
       const diagram = storage.createDiagram("Unicode Test", "api-tests", unicodeSpec);
       expect(diagram.spec.nodes[0].label).toBe("开始 🚀");
 
-      storage.deleteDiagram(diagram.id);
+      await storage.deleteDiagram(diagram.id);
     });
   });
 });

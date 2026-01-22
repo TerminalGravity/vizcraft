@@ -80,8 +80,8 @@ test("list projects", () => {
   expect(projects).toContain("test-project");
 });
 
-test("delete diagram", () => {
-  const deleted = storage.deleteDiagram(testDiagramId);
+test("delete diagram", async () => {
+  const deleted = await storage.deleteDiagram(testDiagramId);
   expect(deleted).toBe(true);
 
   const diagram = storage.getDiagram(testDiagramId);

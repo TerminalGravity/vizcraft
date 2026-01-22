@@ -214,7 +214,7 @@ server.tool(
     id: z.string().describe("Diagram ID to delete"),
   },
   async ({ id }) => {
-    const deleted = storage.deleteDiagram(id);
+    const deleted = await storage.deleteDiagram(id);
 
     return {
       content: [

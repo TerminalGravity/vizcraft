@@ -1,10 +1,21 @@
 /**
  * Database layer using bun:sqlite
+ *
+ * Thumbnails are stored as files on the filesystem (via thumbnails module)
+ * rather than as base64 data URLs in the database.
  */
 
 import { Database } from "bun:sqlite";
 import { nanoid } from "nanoid";
 import type { Diagram, DiagramSpec, DiagramVersion } from "../types";
+import {
+  saveThumbnail,
+  loadThumbnail,
+  deleteThumbnail,
+  thumbnailExists,
+  cleanupOrphans as cleanupOrphanThumbnails,
+  listThumbnails,
+} from "./thumbnails";
 
 const DATA_DIR = process.env.DATA_DIR || "./data";
 const DB_PATH = `${DATA_DIR}/vizcraft.db`;
@@ -112,7 +123,10 @@ export const storage = {
     return this.getDiagram(id);
   },
 
-  deleteDiagram(id: string): boolean {
+  async deleteDiagram(id: string): Promise<boolean> {
+    // Delete associated thumbnail file
+    await deleteThumbnail(id);
+
     db.run(`DELETE FROM diagram_versions WHERE diagram_id = ?`, [id]);
     db.run(`DELETE FROM agent_runs WHERE diagram_id = ?`, [id]);
     const result = db.run(`DELETE FROM diagrams WHERE id = ?`, [id]);
@@ -263,13 +277,54 @@ export const storage = {
     return this.getDiagram(newId);
   },
 
-  // Thumbnails
-  updateThumbnail(id: string, thumbnailDataUrl: string): boolean {
+  // Thumbnails - stored as files on filesystem
+  async updateThumbnail(id: string, thumbnailDataUrl: string): Promise<boolean> {
+    // Save thumbnail to filesystem
+    const saved = await saveThumbnail(id, thumbnailDataUrl);
+    if (!saved) {
+      return false;
+    }
+
+    // Update diagram's updated_at timestamp
     const result = db.run(
-      `UPDATE diagrams SET thumbnail_url = ?, updated_at = ? WHERE id = ?`,
-      [thumbnailDataUrl, new Date().toISOString(), id]
+      `UPDATE diagrams SET updated_at = ? WHERE id = ?`,
+      [new Date().toISOString(), id]
     );
     return result.changes > 0;
+  },
+
+  /**
+   * Load a diagram's thumbnail from filesystem
+   */
+  async loadThumbnail(id: string): Promise<string | null> {
+    return loadThumbnail(id);
+  },
+
+  /**
+   * Check if a thumbnail exists for a diagram
+   */
+  async hasThumbnail(id: string): Promise<boolean> {
+    return thumbnailExists(id);
+  },
+
+  /**
+   * Delete a diagram's thumbnail
+   */
+  async deleteThumbnail(id: string): Promise<boolean> {
+    return deleteThumbnail(id);
+  },
+
+  /**
+   * Clean up orphaned thumbnails (thumbnails without matching diagrams)
+   */
+  async cleanupOrphanedThumbnails(): Promise<number> {
+    // Get all diagram IDs
+    const rows = db.query<{ id: string }, []>(
+      `SELECT id FROM diagrams`
+    ).all();
+    const existingIds = new Set(rows.map((r) => r.id));
+
+    return cleanupOrphanThumbnails(existingIds);
   },
 
   // Projects
