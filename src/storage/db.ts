@@ -78,8 +78,25 @@ function columnExists(table: string, column: string): boolean {
 }
 
 /**
+ * Error thrown when a database migration fails
+ */
+class MigrationError extends Error {
+  constructor(
+    message: string,
+    public readonly table: string,
+    public readonly column: string,
+    public readonly cause?: Error
+  ) {
+    super(message);
+    this.name = "MigrationError";
+  }
+}
+
+/**
  * Safely add a column to a table if it doesn't exist
- * Uses PRAGMA table_info to check first, avoiding the need to catch errors
+ * Uses PRAGMA table_info to check first, then verifies success after ALTER
+ *
+ * @throws MigrationError if the migration fails
  */
 function migrateAddColumn(
   table: string,
@@ -95,7 +112,29 @@ function migrateAddColumn(
     ? ` DEFAULT ${typeof defaultValue === "string" ? `'${defaultValue}'` : defaultValue}`
     : "";
 
-  db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}${defaultClause}`);
+  try {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}${defaultClause}`);
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    log.error("Migration failed", { table, column, type, error: errorMessage });
+    throw new MigrationError(
+      `Failed to add column '${column}' to table '${table}': ${errorMessage}`,
+      table,
+      column,
+      err instanceof Error ? err : undefined
+    );
+  }
+
+  // Verify the column was actually added
+  if (!columnExists(table, column)) {
+    log.error("Migration verification failed", { table, column });
+    throw new MigrationError(
+      `Column '${column}' was not added to table '${table}' (verification failed)`,
+      table,
+      column
+    );
+  }
+
   log.info("Added column to table", { column, table });
   return true;
 }
@@ -1199,3 +1238,6 @@ export const storage = {
 };
 
 export default storage;
+
+// Export error types for external handling
+export { MigrationError };
