@@ -380,6 +380,23 @@ export function clearPersistedAuditLogs(): void {
 
 // ==================== Helpers ====================
 
+/**
+ * Safely parse JSON details from audit log row
+ * Returns undefined if parsing fails instead of throwing
+ */
+function safeParseDetails(json: string, context?: unknown): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(json);
+  } catch (err) {
+    log.warn("Failed to parse audit entry details", {
+      error: err instanceof Error ? err.message : String(err),
+      context: String(context).slice(0, 100),
+      preview: json.slice(0, 50),
+    });
+    return undefined;
+  }
+}
+
 function rowToEntry(row: {
   timestamp: string;
   action: string;
@@ -398,7 +415,7 @@ function rowToEntry(row: {
     userRole: row.user_role,
     resourceType: row.resource_type as "diagram" | "share" | "ownership",
     resourceId: row.resource_id,
-    details: row.details ? JSON.parse(row.details) : undefined,
+    details: row.details ? safeParseDetails(row.details, row.timestamp) : undefined,
     ipAddress: row.ip_address ?? undefined,
     userAgent: row.user_agent ?? undefined,
   };
