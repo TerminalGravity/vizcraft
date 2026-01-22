@@ -5,6 +5,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { logger } from "hono/logger";
 import { storage } from "./storage/db";
 import { loadAgents, getAgent } from "./agents/loader";
 import { runAgent } from "./agents/runner";
@@ -17,37 +18,106 @@ import { join, extname } from "path";
 const PORT = parseInt(process.env.WEB_PORT || "3420");
 const DATA_DIR = process.env.DATA_DIR || "./data";
 
+// Custom error class for API errors
+class APIError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public status: number = 400
+  ) {
+    super(message);
+    this.name = "APIError";
+  }
+}
+
 const app = new Hono();
+
+// Middleware
 app.use("*", cors());
+app.use("*", logger());
+
+// Global error handler
+app.onError((err, c) => {
+  console.error(`[API Error] ${c.req.method} ${c.req.path}:`, err);
+
+  if (err instanceof APIError) {
+    return c.json({
+      error: true,
+      message: err.message,
+      code: err.code,
+    }, err.status as 400 | 404 | 500);
+  }
+
+  if (err instanceof SyntaxError) {
+    return c.json({
+      error: true,
+      message: "Invalid JSON in request body",
+      code: "INVALID_JSON",
+    }, 400);
+  }
+
+  return c.json({
+    error: true,
+    message: "Internal server error",
+    code: "INTERNAL_ERROR",
+    ...(process.env.NODE_ENV === "development" && { details: err.message }),
+  }, 500);
+});
+
+// 404 handler for API routes
+app.notFound((c) => {
+  if (c.req.path.startsWith("/api")) {
+    return c.json({
+      error: true,
+      message: `API endpoint not found: ${c.req.method} ${c.req.path}`,
+      code: "NOT_FOUND",
+    }, 404);
+  }
+  return c.text("Not Found", 404);
+});
 
 // Health check
 app.get("/api/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 
 // List diagrams
 app.get("/api/diagrams", (c) => {
-  const project = c.req.query("project");
-  const diagrams = storage.listDiagrams(project);
-  const projects = storage.listProjects();
-  return c.json({
-    count: diagrams.length,
-    diagrams: diagrams.map((d) => ({
-      id: d.id,
-      name: d.name,
-      project: d.project,
-      spec: d.spec,
-      thumbnailUrl: d.thumbnailUrl,
-      updatedAt: d.updatedAt,
-    })),
-    projects,
-  });
+  try {
+    const project = c.req.query("project");
+    const diagrams = storage.listDiagrams(project);
+    const projects = storage.listProjects();
+    return c.json({
+      count: diagrams.length,
+      diagrams: diagrams.map((d) => ({
+        id: d.id,
+        name: d.name,
+        project: d.project,
+        spec: d.spec,
+        thumbnailUrl: d.thumbnailUrl,
+        updatedAt: d.updatedAt,
+      })),
+      projects,
+    });
+  } catch (err) {
+    throw new APIError("LIST_FAILED", "Failed to list diagrams", 500);
+  }
 });
 
 // Get diagram
 app.get("/api/diagrams/:id", (c) => {
-  const id = c.req.param("id");
-  const diagram = storage.getDiagram(id);
-  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
-  return c.json(diagram);
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+    return c.json(diagram);
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("GET_FAILED", "Failed to get diagram", 500);
+  }
 });
 
 // Create diagram
@@ -142,34 +212,69 @@ app.put("/api/diagrams/:id/thumbnail", async (c) => {
 
 // Get versions
 app.get("/api/diagrams/:id/versions", (c) => {
-  const versions = storage.getVersions(c.req.param("id"));
-  return c.json({ versions });
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+    // Check if diagram exists
+    if (!storage.getDiagram(id)) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+    const versions = storage.getVersions(id);
+    return c.json({ versions, count: versions.length });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("VERSIONS_FAILED", "Failed to get diagram versions", 500);
+  }
 });
 
 // List projects
-app.get("/api/projects", (c) => c.json({ projects: storage.listProjects() }));
+app.get("/api/projects", (c) => {
+  try {
+    const projects = storage.listProjects();
+    return c.json({ projects, count: projects.length });
+  } catch (err) {
+    throw new APIError("PROJECTS_FAILED", "Failed to list projects", 500);
+  }
+});
 
 // List agents
 app.get("/api/agents", async (c) => {
-  const refresh = c.req.query("refresh") === "true";
-  const agents = await loadAgents(refresh);
-  return c.json({
-    count: agents.length,
-    agents: agents.map((a) => ({
-      id: a.id,
-      name: a.name,
-      description: a.description,
-      type: a.type,
-    })),
-  });
+  try {
+    const refresh = c.req.query("refresh") === "true";
+    const agents = await loadAgents(refresh);
+    return c.json({
+      count: agents.length,
+      agents: agents.map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        type: a.type,
+      })),
+    });
+  } catch (err) {
+    console.error("GET /api/agents error:", err);
+    throw new APIError("AGENTS_FAILED", "Failed to load agents", 500);
+  }
 });
 
 // Get specific agent
 app.get("/api/agents/:id", async (c) => {
-  const id = c.req.param("id");
-  const agent = await getAgent(id);
-  if (!agent) return c.json({ error: "Agent not found" }, 404);
-  return c.json(agent);
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Agent ID is required", 400);
+    }
+    const agent = await getAgent(id);
+    if (!agent) {
+      throw new APIError("NOT_FOUND", "Agent not found", 404);
+    }
+    return c.json(agent);
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("AGENT_GET_FAILED", "Failed to get agent", 500);
+  }
 });
 
 // Get LLM provider status
@@ -195,29 +300,56 @@ app.get("/api/llm/status", async (c) => {
 
 // List available themes
 app.get("/api/themes", (c) => {
-  const themes = listThemes().map((t) => ({
-    id: t.id,
-    name: t.name,
-    description: t.description,
-    mode: t.mode,
-  }));
-  return c.json({ themes });
+  try {
+    const themes = listThemes().map((t) => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      mode: t.mode,
+    }));
+    return c.json({ themes, count: themes.length });
+  } catch (err) {
+    throw new APIError("THEMES_FAILED", "Failed to list themes", 500);
+  }
 });
 
 // Get theme details
 app.get("/api/themes/:id", (c) => {
-  const id = c.req.param("id");
-  const theme = getTheme(id);
-  return c.json(theme);
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Theme ID is required", 400);
+    }
+    const theme = getTheme(id);
+    if (!theme) {
+      throw new APIError("NOT_FOUND", "Theme not found", 404);
+    }
+    return c.json(theme);
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("THEME_GET_FAILED", "Failed to get theme", 500);
+  }
 });
 
 // Get theme CSS
 app.get("/api/themes/:id/css", (c) => {
-  const id = c.req.param("id");
-  const theme = getTheme(id);
-  const css = generateStyledCSS(theme);
-  c.header("Content-Type", "text/css");
-  return c.text(css);
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Theme ID is required", 400);
+    }
+    const theme = getTheme(id);
+    if (!theme) {
+      throw new APIError("NOT_FOUND", "Theme not found", 404);
+    }
+    const css = generateStyledCSS(theme);
+    c.header("Content-Type", "text/css");
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.text(css);
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("THEME_CSS_FAILED", "Failed to generate theme CSS", 500);
+  }
 });
 
 // Apply theme to diagram
@@ -290,32 +422,66 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", async (c) => {
 
 // Export diagram as SVG (server-side generation)
 app.get("/api/diagrams/:id/export/svg", (c) => {
-  const id = c.req.param("id");
-  const diagram = storage.getDiagram(id);
-  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
 
-  const svg = generateSVG(diagram.spec);
-  return new Response(svg, {
-    headers: {
-      "Content-Type": "image/svg+xml",
-      "Content-Disposition": `attachment; filename="${diagram.name}.svg"`,
-    },
-  });
+    const svg = generateSVG(diagram.spec);
+    // Sanitize filename
+    const safeName = diagram.name.replace(/[^a-zA-Z0-9-_]/g, "_");
+    return new Response(svg, {
+      headers: {
+        "Content-Type": "image/svg+xml",
+        "Content-Disposition": `attachment; filename="${safeName}.svg"`,
+        "Cache-Control": "no-cache",
+      },
+    });
+  } catch (err) {
+    if (err instanceof APIError) {
+      return new Response(JSON.stringify({ error: true, message: err.message, code: err.code }), {
+        status: err.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    console.error("GET /api/diagrams/:id/export/svg error:", err);
+    return new Response(JSON.stringify({ error: true, message: "Failed to export SVG", code: "EXPORT_FAILED" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 });
 
 // Export diagram as PNG (via SVG conversion)
 app.get("/api/diagrams/:id/export/png", async (c) => {
-  const id = c.req.param("id");
-  const diagram = storage.getDiagram(id);
-  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
+  try {
+    const id = c.req.param("id");
+    if (!id?.trim()) {
+      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+    }
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
 
-  // For PNG, we need browser rendering - return instruction
-  // In a full implementation, we'd use puppeteer/playwright
-  return c.json({
-    message: "PNG export requires browser rendering",
-    suggestion: `Open http://localhost:${PORT}/diagram/${id} and use Export PNG button`,
-    svgUrl: `/api/diagrams/${id}/export/svg`,
-  });
+    // For PNG, we need browser rendering - return instruction
+    // In a full implementation, we'd use puppeteer/playwright
+    return c.json({
+      message: "PNG export requires browser rendering",
+      suggestion: `Open http://localhost:${PORT}/diagram/${id} and use Export PNG button`,
+      svgUrl: `/api/diagrams/${id}/export/svg`,
+      diagramId: id,
+      diagramName: diagram.name,
+    });
+  } catch (err) {
+    if (err instanceof APIError) throw err;
+    throw new APIError("EXPORT_FAILED", "Failed to get export info", 500);
+  }
 });
 
 // Generate SVG from diagram spec (server-side)
