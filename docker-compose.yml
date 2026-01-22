@@ -1,19 +1,34 @@
 version: "3.8"
 
+# Vizcraft Docker Compose
+#
+# Services:
+# - web: Web UI for viewing/editing diagrams (http://localhost:3420)
+#
+# For MCP server (Claude Code CLI), use docker run directly:
+#   docker run -i --rm -v vizcraft-data:/app/data vizcraft mcp
+
 services:
-  vizcraft:
+  web:
     build: .
-    container_name: vizcraft-mcp
+    container_name: vizcraft-web
+    command: web
+    ports:
+      - "3420:3420"
     volumes:
       - vizcraft-data:/app/data
     environment:
       - DATA_DIR=/app/data
+      - WEB_PORT=3420
       - WEB_URL=http://localhost:3420
-    # MCP uses stdio, so no ports needed for the server itself
-    # Uncomment when web UI is added:
-    # ports:
-    #   - "3420:3420"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3420/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 volumes:
   vizcraft-data:
+    name: vizcraft-data

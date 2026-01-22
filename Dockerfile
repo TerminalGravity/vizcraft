@@ -1,5 +1,5 @@
-# Vizcraft MCP Server
-# AI-Native Diagramming for Claude Code
+# Vizcraft - AI-Native Diagramming for Claude Code
+# Multi-service Docker image: MCP server + Web UI
 
 FROM oven/bun:1.3 AS builder
 
@@ -14,31 +14,38 @@ RUN bun install --frozen-lockfile
 # Copy source
 COPY . .
 
-# Build
-RUN bun build src/server.ts --outdir dist --target bun
+# Build web UI
+RUN bun run web:build
 
 # Production image
 FROM oven/bun:1.3-slim
 
 WORKDIR /app
 
-# Copy built files and dependencies
-COPY --from=builder /app/dist ./dist
+# Copy all source files (needed for runtime)
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/web ./web
+COPY --from=builder /app/data ./data
 
-# Create data directory
+# Create data directories
 RUN mkdir -p /app/data/diagrams /app/data/exports /app/data/agents
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Environment
 ENV NODE_ENV=production
 ENV DATA_DIR=/app/data
-ENV PORT=8420
+ENV WEB_PORT=3420
 ENV WEB_URL=http://localhost:3420
 
-# The MCP server uses stdio, not HTTP
-# This is for the web UI when we add it
-EXPOSE 8420 3420
+# Web UI port
+EXPOSE 3420
 
-# Run MCP server
-CMD ["bun", "run", "dist/server.js"]
+# Default: run both MCP server info and Web UI
+# Override with: docker run vizcraft mcp (for MCP only)
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["web"]
