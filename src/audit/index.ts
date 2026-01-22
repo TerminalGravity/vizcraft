@@ -50,9 +50,18 @@ export interface AuditEntry {
   userAgent?: string;
 }
 
-// In-memory audit buffer (for production, use a proper logging service)
-const auditBuffer: AuditEntry[] = [];
-const MAX_BUFFER_SIZE = 1000;
+// Import persistence layer for durable audit logs
+import {
+  queueAuditEntry,
+  getMemoryCache,
+  queryAuditLogs,
+  getPersistedStats,
+  flushPendingWrites,
+  cleanupOldEntries,
+  shutdownAuditPersistence,
+  clearPersistedAuditLogs,
+  AUDIT_CONFIG,
+} from "./persistence";
 
 /**
  * Log an audit event
@@ -84,11 +93,8 @@ export function audit(
     })
   );
 
-  // Add to buffer (ring buffer behavior)
-  if (auditBuffer.length >= MAX_BUFFER_SIZE) {
-    auditBuffer.shift();
-  }
-  auditBuffer.push(entry);
+  // Queue for persistence (async batch write to SQLite)
+  queueAuditEntry(entry);
 }
 
 /**
@@ -101,7 +107,8 @@ function getResourceType(action: AuditAction): "diagram" | "share" | "ownership"
 }
 
 /**
- * Get recent audit entries (for monitoring/debugging)
+ * Get recent audit entries from memory cache (fast path)
+ * For historical queries beyond the memory cache, use queryPersistedAuditLogs
  */
 export function getAuditLog(options: {
   limit?: number;
@@ -110,7 +117,8 @@ export function getAuditLog(options: {
   resourceId?: string;
   since?: Date;
 } = {}): AuditEntry[] {
-  let entries = [...auditBuffer];
+  // Use memory cache for hot reads
+  let entries = [...getMemoryCache()];
 
   // Filter by userId
   if (options.userId !== undefined) {
@@ -145,33 +153,95 @@ export function getAuditLog(options: {
 }
 
 /**
- * Clear audit buffer (for testing)
+ * Query persisted audit logs from SQLite
+ * Use this for historical queries beyond the memory cache
  */
-export function clearAuditLog(): void {
-  auditBuffer.length = 0;
+export function queryPersistedAuditLogs(options: {
+  limit?: number;
+  userId?: string;
+  action?: AuditAction;
+  resourceId?: string;
+  since?: Date;
+  until?: Date;
+} = {}): AuditEntry[] {
+  return queryAuditLogs(options);
 }
 
 /**
- * Get audit stats
+ * Clear audit buffer and persisted logs (for testing)
+ */
+export function clearAuditLog(): void {
+  clearPersistedAuditLogs();
+}
+
+/**
+ * Get audit stats from memory cache
  */
 export function getAuditStats(): {
   totalEntries: number;
   actionCounts: Record<string, number>;
   uniqueUsers: number;
 } {
+  const memoryCache = getMemoryCache();
   const actionCounts: Record<string, number> = {};
   const userIds = new Set<string | null>();
 
-  for (const entry of auditBuffer) {
+  for (const entry of memoryCache) {
     actionCounts[entry.action] = (actionCounts[entry.action] || 0) + 1;
     userIds.add(entry.userId);
   }
 
   return {
-    totalEntries: auditBuffer.length,
+    totalEntries: memoryCache.length,
     actionCounts,
     uniqueUsers: userIds.size,
   };
+}
+
+/**
+ * Get comprehensive audit stats including persistence info
+ */
+export function getAuditStatsExtended(): {
+  memory: {
+    totalEntries: number;
+    actionCounts: Record<string, number>;
+    uniqueUsers: number;
+  };
+  persistence: {
+    totalEntries: number;
+    oldestEntry: string | null;
+    newestEntry: string | null;
+    pendingWrites: number;
+    memoryCacheSize: number;
+  };
+  config: typeof AUDIT_CONFIG;
+} {
+  return {
+    memory: getAuditStats(),
+    persistence: getPersistedStats(),
+    config: AUDIT_CONFIG,
+  };
+}
+
+/**
+ * Manually trigger a flush of pending audit entries to SQLite
+ */
+export function flushAuditLog(): number {
+  return flushPendingWrites();
+}
+
+/**
+ * Manually trigger cleanup of old audit entries
+ */
+export function cleanupAuditLog(): number {
+  return cleanupOldEntries();
+}
+
+/**
+ * Graceful shutdown - flushes all pending writes
+ */
+export function shutdownAuditLog(): void {
+  shutdownAuditPersistence();
 }
 
 /**
