@@ -183,6 +183,15 @@ export const protectedStorage = {
   },
 
   /**
+   * Get the latest version for a diagram
+   */
+  getLatestVersion(diagramId: string): DiagramVersion | null {
+    return withProtection("SELECT", "diagram_versions", () =>
+      rawStorage.getLatestVersion(diagramId)
+    );
+  },
+
+  /**
    * Restore a diagram to a specific version
    */
   restoreVersion(diagramId: string, version: number): Diagram | null {
@@ -210,6 +219,15 @@ export const protectedStorage = {
   listProjects(): string[] {
     return withProtection("SELECT", "diagrams", () =>
       rawStorage.listProjects()
+    );
+  },
+
+  /**
+   * Get storage statistics
+   */
+  getStats(): { diagramCount: number; versionCount: number; projectCount: number } {
+    return withProtection("SELECT", "diagrams", () =>
+      rawStorage.getStats()
     );
   },
 

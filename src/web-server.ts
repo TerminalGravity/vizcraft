@@ -6,7 +6,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { storage } from "./storage/db";
+import { protectedStorage as storage } from "./storage/protected-storage";
 import { loadAgents, getAgent } from "./agents/loader";
 import { runAgent } from "./agents/runner";
 import { getProviderRegistry, listConfiguredProviders } from "./llm";

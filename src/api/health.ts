@@ -8,6 +8,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
+import { circuitBreakers, type CircuitBreakerStats } from "../utils/circuit-breaker";
 
 // Health check status types
 export type HealthStatus = "healthy" | "degraded" | "unhealthy";
@@ -28,6 +29,7 @@ export interface HealthResponse {
     database?: HealthCheckResult;
     filesystem?: HealthCheckResult;
     memory?: HealthCheckResult;
+    circuitBreakers?: HealthCheckResult;
   };
 }
 
@@ -129,6 +131,59 @@ export async function checkFilesystem(): Promise<HealthCheckResult> {
 }
 
 /**
+ * Check circuit breaker states
+ */
+export function checkCircuitBreakers(): HealthCheckResult {
+  const breakers = {
+    database: circuitBreakers.database.getStats(),
+    llm: circuitBreakers.llm.getStats(),
+    externalApi: circuitBreakers.externalApi.getStats(),
+  };
+
+  // Check if any circuit breaker is OPEN (failing)
+  const openBreakers = Object.entries(breakers)
+    .filter(([_, stats]) => stats.state === "OPEN")
+    .map(([name]) => name);
+
+  const halfOpenBreakers = Object.entries(breakers)
+    .filter(([_, stats]) => stats.state === "HALF_OPEN")
+    .map(([name]) => name);
+
+  if (openBreakers.length > 0) {
+    return {
+      status: "error",
+      error: `Circuit breakers OPEN: ${openBreakers.join(", ")}`,
+      details: {
+        database: breakers.database,
+        llm: breakers.llm,
+        externalApi: breakers.externalApi,
+      },
+    };
+  }
+
+  if (halfOpenBreakers.length > 0) {
+    return {
+      status: "ok",
+      details: {
+        warning: `Circuit breakers recovering: ${halfOpenBreakers.join(", ")}`,
+        database: breakers.database,
+        llm: breakers.llm,
+        externalApi: breakers.externalApi,
+      },
+    };
+  }
+
+  return {
+    status: "ok",
+    details: {
+      database: breakers.database,
+      llm: breakers.llm,
+      externalApi: breakers.externalApi,
+    },
+  };
+}
+
+/**
  * Check memory usage
  */
 export function checkMemory(): HealthCheckResult {
@@ -164,8 +219,8 @@ function determineOverallStatus(checks: HealthResponse["checks"]): HealthStatus 
     return "unhealthy";
   }
 
-  // If memory is over threshold, degraded
-  if (checks.memory?.status === "error") {
+  // If circuit breakers are open or memory is over threshold, degraded
+  if (checks.circuitBreakers?.status === "error" || checks.memory?.status === "error") {
     return "degraded";
   }
 
@@ -184,11 +239,13 @@ export async function runHealthChecks(): Promise<HealthResponse> {
   ]);
 
   const memoryResult = checkMemory();
+  const circuitBreakerResult = checkCircuitBreakers();
 
   const checks = {
     database: databaseResult,
     filesystem: filesystemResult,
     memory: memoryResult,
+    circuitBreakers: circuitBreakerResult,
   };
 
   return {

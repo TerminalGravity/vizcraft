@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { storage } from "./storage/db";
+import { protectedStorage as storage } from "./storage/protected-storage";
 import type { DiagramSpec, DiagramChange } from "./types";
 import { sanitizeFilename, createSafeExportPath, validateExportPath } from "./utils/path-safety";
 

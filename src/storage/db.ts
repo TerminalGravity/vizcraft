@@ -563,6 +563,25 @@ export const storage = {
 
     return rows.map(row => row.project);
   },
+
+  /**
+   * Get storage statistics for monitoring
+   */
+  getStats(): { diagramCount: number; versionCount: number; projectCount: number } {
+    const diagramCount = db.query<{ count: number }, []>(
+      `SELECT COUNT(*) as count FROM diagrams`
+    ).get()?.count ?? 0;
+
+    const versionCount = db.query<{ count: number }, []>(
+      `SELECT COUNT(*) as count FROM diagram_versions`
+    ).get()?.count ?? 0;
+
+    const projectCount = db.query<{ count: number }, []>(
+      `SELECT COUNT(DISTINCT project) as count FROM diagrams`
+    ).get()?.count ?? 0;
+
+    return { diagramCount, versionCount, projectCount };
+  },
 };
 
 export default storage;

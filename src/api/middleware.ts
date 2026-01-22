@@ -9,7 +9,7 @@
 
 import { Context, Next } from "hono";
 import { z } from "zod";
-import { storage } from "../storage/db";
+import { protectedStorage as storage } from "../storage/protected-storage";
 import type { Diagram } from "../types";
 
 // ==================== Error Class ====================
