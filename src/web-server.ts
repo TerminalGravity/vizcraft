@@ -505,6 +505,12 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
       baseVersion = parseInt(versionMatch[1], 10);
     }
 
+    // Invalidate cache BEFORE update for stronger consistency
+    // This ensures no stale data is served between DB update and invalidation
+    // Trade-off: unnecessary cache miss if update fails (acceptable for consistency)
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+
     // Perform update with optional optimistic locking
     const result = storage.updateDiagram(id, body.spec, body.message, baseVersion);
 
@@ -523,10 +529,6 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
         },
       }, 409);
     }
-
-    // Success - invalidate caches
-    diagramCache.delete(`diagram:${id}`);
-    listCache.invalidatePattern(/^list:/);
 
     // Broadcast update to collaborators
     broadcastDiagramSync(id, body.spec);
@@ -548,14 +550,15 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
 app.delete("/api/diagrams/:id", async (c) => {
   try {
     const id = c.req.param("id");
+
+    // Invalidate cache BEFORE delete for stronger consistency
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+
     const deleted = await storage.deleteDiagram(id);
     if (!deleted) {
       return notFoundResponse(c, "Diagram", id);
     }
-
-    // Invalidate caches
-    diagramCache.delete(`diagram:${id}`);
-    listCache.invalidatePattern(/^list:/);
 
     return operationResponse(c, true);
   } catch (err) {
@@ -1238,6 +1241,10 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
       throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
     }
 
+    // Invalidate cache BEFORE update for stronger consistency
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+
     // Update diagram with new positions using safe transform (handles conflicts)
     const updateResult = storage.transformDiagram(
       id,
@@ -1257,9 +1264,6 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
 
     // Broadcast to collaborators
     broadcastDiagramSync(id, result.spec!);
-
-    // Invalidate cache
-    diagramCache.delete(`diagram:${id}`);
 
     return c.json({
       success: true,
@@ -1341,6 +1345,10 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
 
     const themeId = body.themeId;
 
+    // Invalidate cache BEFORE update for stronger consistency
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+
     // Use safe transform to handle concurrent modifications
     const updateResult = storage.transformDiagram(
       id,
@@ -1366,9 +1374,6 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
 
     // Broadcast to collaborators
     broadcastDiagramSync(id, themedSpec);
-
-    // Invalidate cache
-    diagramCache.delete(`diagram:${id}`);
 
     return c.json({
       success: true,
@@ -1403,6 +1408,10 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
     );
 
     if (result.success && result.spec) {
+      // Invalidate cache BEFORE update for stronger consistency
+      diagramCache.delete(`diagram:${diagramId}`);
+      listCache.invalidatePattern(/^list:/);
+
       // Update the diagram with version check to detect concurrent modifications
       // Note: Agent operations are expensive, so we don't retry on conflict
       // Instead, we fail and ask the user to retry manually
@@ -1431,9 +1440,6 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
 
       // Broadcast to collaborators
       broadcastDiagramSync(diagramId, result.spec);
-
-      // Invalidate cache
-      diagramCache.delete(`diagram:${diagramId}`);
 
       return c.json({
         success: true,
