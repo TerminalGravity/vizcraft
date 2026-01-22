@@ -74,6 +74,130 @@ app.get("/api/diagrams/:id/versions", (c) => {
 // List projects
 app.get("/api/projects", (c) => c.json({ projects: storage.listProjects() }));
 
+// Export diagram as SVG (server-side generation)
+app.get("/api/diagrams/:id/export/svg", (c) => {
+  const id = c.req.param("id");
+  const diagram = storage.getDiagram(id);
+  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
+
+  const svg = generateSVG(diagram.spec);
+  return new Response(svg, {
+    headers: {
+      "Content-Type": "image/svg+xml",
+      "Content-Disposition": `attachment; filename="${diagram.name}.svg"`,
+    },
+  });
+});
+
+// Export diagram as PNG (via SVG conversion)
+app.get("/api/diagrams/:id/export/png", async (c) => {
+  const id = c.req.param("id");
+  const diagram = storage.getDiagram(id);
+  if (!diagram) return c.json({ error: "Diagram not found" }, 404);
+
+  // For PNG, we need browser rendering - return instruction
+  // In a full implementation, we'd use puppeteer/playwright
+  return c.json({
+    message: "PNG export requires browser rendering",
+    suggestion: `Open http://localhost:${PORT}/diagram/${id} and use Export PNG button`,
+    svgUrl: `/api/diagrams/${id}/export/svg`,
+  });
+});
+
+// Generate SVG from diagram spec (server-side)
+function generateSVG(spec: DiagramSpec): string {
+  const padding = 50;
+  const nodeWidth = 150;
+  const nodeHeight = 80;
+
+  // Calculate positions for nodes if not specified
+  const nodePositions: Record<string, { x: number; y: number }> = {};
+  spec.nodes.forEach((node, i) => {
+    nodePositions[node.id] = {
+      x: node.position?.x ?? padding + (i % 4) * (nodeWidth + 50),
+      y: node.position?.y ?? padding + Math.floor(i / 4) * (nodeHeight + 50),
+    };
+  });
+
+  // Calculate SVG dimensions
+  const positions = Object.values(nodePositions);
+  const maxX = Math.max(...positions.map((p) => p.x)) + nodeWidth + padding;
+  const maxY = Math.max(...positions.map((p) => p.y)) + nodeHeight + padding;
+
+  // Build SVG
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxX}" height="${maxY}" viewBox="0 0 ${maxX} ${maxY}">
+  <style>
+    .node { fill: #1e293b; stroke: #3b82f6; stroke-width: 2; }
+    .node-label { fill: #f1f5f9; font-family: system-ui, sans-serif; font-size: 14px; text-anchor: middle; dominant-baseline: middle; }
+    .edge { stroke: #64748b; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+    .edge-label { fill: #94a3b8; font-family: system-ui, sans-serif; font-size: 12px; text-anchor: middle; }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="#0f172a" />
+`;
+
+  // Draw edges first (so nodes appear on top)
+  spec.edges.forEach((edge) => {
+    const from = nodePositions[edge.from];
+    const to = nodePositions[edge.to];
+    if (from && to) {
+      const x1 = from.x + nodeWidth / 2;
+      const y1 = from.y + nodeHeight;
+      const x2 = to.x + nodeWidth / 2;
+      const y2 = to.y;
+
+      svg += `  <line class="edge" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />\n`;
+
+      if (edge.label) {
+        const midX = (x1 + x2) / 2;
+        const midY = (y1 + y2) / 2;
+        svg += `  <text class="edge-label" x="${midX}" y="${midY - 8}">${escapeXml(edge.label)}</text>\n`;
+      }
+    }
+  });
+
+  // Draw nodes
+  spec.nodes.forEach((node) => {
+    const pos = nodePositions[node.id];
+    const cx = pos.x + nodeWidth / 2;
+    const cy = pos.y + nodeHeight / 2;
+
+    if (node.type === "circle") {
+      svg += `  <ellipse class="node" cx="${cx}" cy="${cy}" rx="${nodeWidth / 2 - 10}" ry="${nodeHeight / 2 - 5}" />\n`;
+    } else if (node.type === "diamond") {
+      const points = [
+        `${cx},${pos.y}`,
+        `${pos.x + nodeWidth},${cy}`,
+        `${cx},${pos.y + nodeHeight}`,
+        `${pos.x},${cy}`,
+      ].join(" ");
+      svg += `  <polygon class="node" points="${points}" />\n`;
+    } else {
+      // Default: rectangle
+      svg += `  <rect class="node" x="${pos.x}" y="${pos.y}" width="${nodeWidth}" height="${nodeHeight}" rx="8" />\n`;
+    }
+
+    svg += `  <text class="node-label" x="${cx}" y="${cy}">${escapeXml(node.label)}</text>\n`;
+  });
+
+  svg += "</svg>";
+  return svg;
+}
+
+// Escape XML special characters
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 // Server setup
 const PORT = parseInt(process.env.WEB_PORT || "3420");
 const WEB_DIR = join(import.meta.dir, "..", "web");

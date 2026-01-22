@@ -3,7 +3,7 @@
  * AI-Native Diagramming for Claude Code
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { Tldraw, createTLStore, defaultShapeUtils } from "tldraw";
 import "tldraw/tldraw.css";
@@ -290,7 +290,13 @@ function Panel({
 }
 
 // Canvas component with tldraw
-function Canvas({ diagram }: { diagram: Diagram | null }) {
+function Canvas({
+  diagram,
+  editorRef
+}: {
+  diagram: Diagram | null;
+  editorRef: React.MutableRefObject<any>;
+}) {
   if (!diagram) {
     return (
       <div className="canvas">
@@ -311,6 +317,9 @@ function Canvas({ diagram }: { diagram: Diagram | null }) {
       <Tldraw
         store={store}
         onMount={(editor) => {
+          // Store editor reference for export functions
+          editorRef.current = editor;
+
           // Convert diagram spec to tldraw shapes
           const shapes: any[] = [];
           const nodePositions: Record<string, { x: number; y: number }> = {};
@@ -371,6 +380,8 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const editorRef = useRef<any>(null);
 
   const selectedDiagram = diagrams.find((d) => d.id === selectedId) || null;
 
@@ -457,8 +468,108 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
     alert("Diagram spec copied to clipboard!");
   };
 
-  const handleExport = (format: string) => {
-    alert(`Export to ${format} coming soon!`);
+  const handleExport = async (format: string) => {
+    if (!selectedDiagram || !editorRef.current) {
+      alert("No diagram selected or editor not ready");
+      return;
+    }
+
+    const editor = editorRef.current;
+    setExporting(true);
+
+    try {
+      const shapeIds = editor.getCurrentPageShapeIds();
+      if (shapeIds.size === 0) {
+        alert("No shapes to export");
+        setExporting(false);
+        return;
+      }
+
+      if (format === "svg") {
+        // Export as SVG using editor.getSvg()
+        const svg = await editor.getSvg([...shapeIds], {
+          padding: 32,
+          background: true,
+        });
+
+        if (svg) {
+          const svgString = new XMLSerializer().serializeToString(svg);
+          const blob = new Blob([svgString], { type: "image/svg+xml" });
+          downloadBlob(blob, `${selectedDiagram.name}.svg`);
+        }
+      } else if (format === "png") {
+        // Export as PNG by converting SVG to canvas
+        const svg = await editor.getSvg([...shapeIds], {
+          padding: 32,
+          background: true,
+          scale: 2,
+        });
+
+        if (svg) {
+          const svgString = new XMLSerializer().serializeToString(svg);
+          const blob = await svgToPngBlob(svgString);
+          if (blob) {
+            downloadBlob(blob, `${selectedDiagram.name}.png`);
+          }
+        }
+      } else if (format === "pdf") {
+        alert("PDF export coming soon!");
+      }
+    } catch (err) {
+      console.error("Export failed:", err);
+      alert(`Export failed: ${err}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Convert SVG string to PNG blob
+  const svgToPngBlob = (svgString: string): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(svgBlob);
+
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+
+        if (ctx) {
+          ctx.fillStyle = "#0f172a"; // Dark background
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(url);
+            resolve(blob);
+          }, "image/png");
+        } else {
+          URL.revokeObjectURL(url);
+          resolve(null);
+        }
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
+
+      img.src = url;
+    });
+  };
+
+  // Helper to download blob as file
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   if (loading) {
@@ -512,7 +623,7 @@ ${selectedDiagram.spec.edges.map((e) => `- ${e.from} → ${e.to}${e.label ? `: $
               </div>
             )}
           </div>
-          <Canvas diagram={selectedDiagram} />
+          <Canvas diagram={selectedDiagram} editorRef={editorRef} />
         </div>
 
         <Panel

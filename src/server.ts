@@ -230,10 +230,10 @@ server.tool(
 // Tool: export_diagram
 server.tool(
   "export_diagram",
-  "Export diagram to file (json format for now, png/svg coming soon)",
+  "Export diagram to file (json, svg, or png format)",
   {
     id: z.string().describe("Diagram ID"),
-    format: z.enum(["json", "png", "svg"]).default("json").describe("Export format"),
+    format: z.enum(["json", "png", "svg", "pdf"]).default("json").describe("Export format"),
     path: z.string().optional().describe("Output path (defaults to ./data/exports/)"),
   },
   async ({ id, format, path }) => {
@@ -244,32 +244,105 @@ server.tool(
       };
     }
 
-    if (format !== "json") {
+    const basePath = path || `./data/exports/${diagram.name}-${id}`;
+
+    if (format === "json") {
+      const exportPath = `${basePath}.json`;
+      await Bun.write(exportPath, JSON.stringify(diagram.spec, null, 2));
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ success: false, error: `${format} export not yet implemented. Use json for now.` }),
+            text: JSON.stringify({
+              success: true,
+              path: exportPath,
+              format,
+              size: JSON.stringify(diagram.spec).length,
+            }),
           },
         ],
       };
     }
 
-    const exportPath = path || `./data/exports/${diagram.name}-${id}.json`;
-    await Bun.write(exportPath, JSON.stringify(diagram.spec, null, 2));
+    if (format === "svg") {
+      // Fetch SVG from web server
+      try {
+        const response = await fetch(`${WEB_URL}/api/diagrams/${id}/export/svg`);
+        if (!response.ok) throw new Error("Failed to generate SVG");
+
+        const svgContent = await response.text();
+        const exportPath = `${basePath}.svg`;
+        await Bun.write(exportPath, svgContent);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                path: exportPath,
+                format,
+                size: svgContent.length,
+                message: `SVG exported to ${exportPath}`,
+              }),
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                error: "SVG export requires web server running. Start with: bun run web:dev",
+                webUrl: `${WEB_URL}/diagram/${id}`,
+              }),
+            },
+          ],
+        };
+      }
+    }
+
+    if (format === "png") {
+      // PNG requires browser rendering
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              message: "PNG export requires browser rendering",
+              instructions: [
+                `1. Open ${WEB_URL}/diagram/${id}`,
+                "2. Click 'Export PNG' button in the panel",
+                "Or use SVG format for server-side export",
+              ],
+              webUrl: `${WEB_URL}/diagram/${id}`,
+              svgAlternative: `Use format: 'svg' for server-side export`,
+            }),
+          },
+        ],
+      };
+    }
+
+    if (format === "pdf") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              message: "PDF export coming soon",
+              svgAlternative: "Use format: 'svg' and convert to PDF externally",
+            }),
+          },
+        ],
+      };
+    }
 
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            success: true,
-            path: exportPath,
-            format,
-            size: JSON.stringify(diagram.spec).length,
-          }),
-        },
-      ],
+      content: [{ type: "text", text: JSON.stringify({ success: false, error: `Unknown format: ${format}` }) }],
     };
   }
 );
