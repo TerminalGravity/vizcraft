@@ -60,7 +60,7 @@ import {
   installShutdownHandlers,
   onShutdown,
 } from "./api/shutdown";
-import { roomManager } from "./collaboration/room-manager";
+import { roomManager, stopCollabCleanup } from "./collaboration/room-manager";
 import {
   escapeXml,
   escapeAttribute,
@@ -2098,6 +2098,10 @@ installShutdownHandlers();
 // Register shutdown callbacks
 onShutdown("close-websockets", () => {
   roomManager.closeAll("Server shutting down");
+});
+
+onShutdown("collab-cleanup", () => {
+  stopCollabCleanup();
 });
 
 onShutdown("flush-metrics", () => {

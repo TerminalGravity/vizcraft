@@ -316,6 +316,7 @@ type DiagramRow = BasicDiagramRow | FullDiagramRow;
 /**
  * Parse shares JSON from database row into typed array
  * Handles invalid JSON gracefully by returning empty array
+ * Logs warnings when data is filtered or invalid to aid debugging
  */
 function parseShares(
   sharesJson: string | null
@@ -324,17 +325,44 @@ function parseShares(
 
   try {
     const parsed = JSON.parse(sharesJson);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) {
+      log.warn("Shares data is not an array", {
+        type: typeof parsed,
+        preview: String(parsed).slice(0, 100),
+      });
+      return [];
+    }
 
-    return parsed.filter(
-      (s): s is { userId: string; permission: "editor" | "viewer" } =>
+    const valid: Array<{ userId: string; permission: "editor" | "viewer" }> = [];
+    let filtered = 0;
+
+    for (const s of parsed) {
+      if (
         typeof s === "object" &&
         s !== null &&
         typeof s.userId === "string" &&
         (s.permission === "editor" || s.permission === "viewer")
-    );
-  } catch {
-    // Invalid JSON, return empty array
+      ) {
+        valid.push(s);
+      } else {
+        filtered++;
+      }
+    }
+
+    if (filtered > 0) {
+      log.warn("Filtered invalid share entries", {
+        totalEntries: parsed.length,
+        validEntries: valid.length,
+        filteredEntries: filtered,
+      });
+    }
+
+    return valid;
+  } catch (err) {
+    log.warn("Failed to parse shares JSON", {
+      error: err instanceof Error ? err.message : String(err),
+      preview: sharesJson.slice(0, 100),
+    });
     return [];
   }
 }
