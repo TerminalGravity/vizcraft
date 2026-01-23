@@ -908,8 +908,16 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
     const id = validateDiagramId(c.req.param("id"));
 
     // Check if diagram exists
-    if (!storage.getDiagram(id)) {
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
       return notFoundResponse(c, "Diagram", id);
+    }
+
+    // Check read permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
     }
 
     // Load thumbnail from filesystem
@@ -943,13 +951,23 @@ app.get("/api/diagrams/:id/versions", (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
     // Check if diagram exists
-    if (!storage.getDiagram(id)) {
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
+
+    // Check read permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
+    }
+
     const versions = storage.getVersions(id);
     return c.json({ versions, count: versions.length });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     throw new APIError("VERSIONS_FAILED", "Failed to get diagram versions", 500);
   }
 });
@@ -969,8 +987,16 @@ app.get("/api/diagrams/:id/versions/:version", (c) => {
       throw new APIError("INVALID_VERSION", "Version must be a positive integer", 400);
     }
 
-    if (!storage.getDiagram(id)) {
+    const diagram = storage.getDiagram(id);
+    if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    // Check read permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
     }
 
     const version = storage.getVersion(id, versionNum);
@@ -1059,6 +1085,13 @@ app.get("/api/diagrams/:id/diff", (c) => {
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    // Check read permission
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
     }
 
     // Default: compare with latest if only v1 provided, or compare consecutive versions
@@ -1305,9 +1338,14 @@ app.get("/api/agents/:id", async (c) => {
   }
 });
 
-// Performance stats endpoint (rate limited to prevent abuse)
-app.get("/api/performance/stats", rateLimiters.admin, (c) => {
+// Performance stats endpoint (admin only - exposes internal metrics)
+app.get("/api/performance/stats", rateLimiters.admin, requireAuth(), (c) => {
   try {
+    const user = getCurrentUser(c);
+    if (user?.role !== "admin") {
+      return errorFromCode(c, ApiError.ADMIN_REQUIRED);
+    }
+
     const diagramStats = diagramCache.getStats();
     const listStats = listCache.getStats();
     const svgStats = svgCache.getStats();
@@ -1344,9 +1382,14 @@ app.get("/api/performance/stats", rateLimiters.admin, (c) => {
   }
 });
 
-// Clear caches (admin endpoint - strict rate limit to prevent DoS)
-app.post("/api/performance/clear-cache", rateLimiters.admin, (c) => {
+// Clear caches (admin only - destructive operation)
+app.post("/api/performance/clear-cache", rateLimiters.admin, requireAuth(), (c) => {
   try {
+    const user = getCurrentUser(c);
+    if (user?.role !== "admin") {
+      return errorFromCode(c, ApiError.ADMIN_REQUIRED);
+    }
+
     diagramCache.clear();
     listCache.clear();
     svgCache.clear();
@@ -1429,9 +1472,14 @@ app.get("/api/audit/stats", rateLimiters.admin, requireAuth(), (c) => {
 
 // ==================== Collaboration Endpoints ====================
 
-// Get collaboration stats
-app.get("/api/collab/stats", (c) => {
+// Get collaboration stats (admin only - exposes internal metrics)
+app.get("/api/collab/stats", rateLimiters.admin, requireAuth(), (c) => {
   try {
+    const user = getCurrentUser(c);
+    if (user?.role !== "admin") {
+      return errorFromCode(c, ApiError.ADMIN_REQUIRED);
+    }
+
     const stats = getCollabStats();
     return c.json(stats);
   } catch (err) {
@@ -1523,6 +1571,13 @@ app.get("/api/diagrams/:id/export/mermaid", (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
+    // Check read permission (required for export)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
+    }
+
     const mermaid = exportToMermaid(diagram.spec);
 
     // Return as plain text for easy copy/paste
@@ -1530,6 +1585,7 @@ app.get("/api/diagrams/:id/export/mermaid", (c) => {
     return c.text(mermaid);
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     log.error("Mermaid export failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.MERMAID_EXPORT_FAILED);
   }
@@ -1546,9 +1602,14 @@ app.get("/api/export-formats", (c) => {
   }
 });
 
-// Get LLM provider status
-app.get("/api/llm/status", async (c) => {
+// Get LLM provider status (admin only - reveals configuration)
+app.get("/api/llm/status", rateLimiters.admin, requireAuth(), async (c) => {
   try {
+    const user = getCurrentUser(c);
+    if (user?.role !== "admin") {
+      return errorFromCode(c, ApiError.ADMIN_REQUIRED);
+    }
+
     const registry = getProviderRegistry();
     const status = await registry.getStatus();
     const configured = listConfiguredProviders();
@@ -1970,6 +2031,13 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
     }
 
+    // Check read permission (required for export)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
+    }
+
     // Check SVG cache (keyed by diagramId:version for automatic invalidation)
     const cacheKey = `svg:${id}:${diagram.version}`;
     let svg = svgCache.get(cacheKey);
@@ -2021,6 +2089,13 @@ app.get("/api/diagrams/:id/export/png", rateLimiters.export, async (c) => {
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    // Check read permission (required for export)
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", id);
     }
 
     // For PNG, we need browser rendering - return instruction
