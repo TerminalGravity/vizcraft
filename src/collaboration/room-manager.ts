@@ -620,9 +620,11 @@ class RoomManager {
       }
     }
 
-    // Clear all state
+    // Clear all state (prevent memory leaks)
     this.rooms.clear();
     this.connections.clear();
+    this.roomConnections.clear();
+    this.emptyRoomTimestamps.clear();
 
     log.info("Closed WebSocket connections", { count: closed });
     return closed;
