@@ -201,7 +201,8 @@ export class AnthropicProvider implements LLMProvider {
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const response = await this.client.messages.create({
+        // Client existence verified by transformDiagram before calling this method
+        const response = await this.client!.messages.create({
           model: this.config.model,
           max_tokens: this.config.maxTokens,
           system: DIAGRAM_SYSTEM_PROMPT,

@@ -68,7 +68,7 @@ function parseIP(ip: string): bigint | null {
 
     // Handle IPv4-mapped IPv6 (::ffff:192.168.1.1)
     const v4MappedMatch = ip.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-    if (v4MappedMatch) {
+    if (v4MappedMatch?.[1]) {
       const v4Part = parseIP(v4MappedMatch[1]);
       if (v4Part === null) return null;
       return 0xffff00000000n | v4Part;

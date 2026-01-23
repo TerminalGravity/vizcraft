@@ -299,6 +299,8 @@ async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Agent
   }
 
   if (!provider.isConfigured) {
+    // Determine the expected environment variable for this provider type
+    // Cast to string in fallback for future extensibility
     const envVar =
       provider.type === "anthropic"
         ? "ANTHROPIC_API_KEY"
@@ -306,7 +308,7 @@ async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Agent
           ? "OPENAI_API_KEY"
           : provider.type === "ollama"
             ? "OLLAMA_HOST"
-            : `${provider.type.toUpperCase()}_API_KEY`;
+            : `${String(provider.type).toUpperCase()}_API_KEY`;
 
     return {
       success: false,

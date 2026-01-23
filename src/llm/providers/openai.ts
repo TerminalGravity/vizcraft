@@ -209,7 +209,8 @@ export class OpenAIProvider implements LLMProvider {
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const response = await this.client.chat.completions.create({
+        // Client existence verified by transformDiagram before calling this method
+        const response = await this.client!.chat.completions.create({
           model: this.config.model,
           max_tokens: this.config.maxTokens,
           temperature: this.config.temperature,

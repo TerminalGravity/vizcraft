@@ -105,7 +105,7 @@ class MigrationError extends Error {
     message: string,
     public readonly table: string,
     public readonly column: string,
-    public readonly cause?: Error
+    public override readonly cause?: Error
   ) {
     super(message);
     this.name = "MigrationError";
