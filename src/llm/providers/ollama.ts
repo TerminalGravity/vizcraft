@@ -21,6 +21,7 @@ import { DiagramTransformOutputSchema } from "../types";
 import type { DiagramSpec } from "../../types";
 import { createLogger } from "../../logging";
 import { circuitBreakers, CircuitBreakerError } from "../../utils/circuit-breaker";
+import { DIAGRAM_SYSTEM_PROMPT_JSON } from "../prompts";
 
 const log = createLogger("ollama");
 
@@ -32,28 +33,6 @@ const DEFAULT_CONFIG = {
   maxTokens: 4096,
   temperature: 0.3,
 };
-
-// System prompt optimized for local models (more explicit JSON instructions)
-const DIAGRAM_SYSTEM_PROMPT = `You are Vizcraft, an expert diagram transformation agent. You analyze and modify diagrams based on natural language instructions.
-
-You MUST respond with valid JSON matching the exact schema provided. Do not include any text outside the JSON object.
-
-DIAGRAM STRUCTURE:
-- nodes: Array of objects with {id, label, type?, color?, position?, details?, width?, height?}
-- edges: Array of objects with {id?, from, to, label?, style?, color?}
-- changes: Array of strings describing what you changed
-
-NODE TYPES (pick one): "box" (default), "diamond" (decisions), "circle" (events), "database", "cloud", "cylinder"
-EDGE STYLES (pick one): "solid" (default), "dashed", "dotted"
-COLORS: Use CSS hex values like "#1e293b", "#3b82f6"
-
-RULES:
-1. Preserve existing node/edge IDs when updating
-2. Generate unique, descriptive IDs for new elements (e.g., "auth-service", "db-main")
-3. Keep the diagram connected - don't create orphan nodes
-4. Position new nodes logically near related nodes
-5. Use concise, technical labels
-6. Always list your changes in the "changes" array`;
 
 // JSON schema to include in prompts (more compact for local models)
 const OUTPUT_SCHEMA = `{
@@ -225,7 +204,7 @@ export class OllamaProvider implements LLMProvider {
         const ollamaRequest: OllamaGenerateRequest = {
           model: this.model,
           prompt: userPrompt,
-          system: DIAGRAM_SYSTEM_PROMPT,
+          system: DIAGRAM_SYSTEM_PROMPT_JSON,
           format: "json",
           stream: false,
           options: {

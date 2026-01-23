@@ -22,6 +22,7 @@ import { DiagramTransformOutputSchema } from "../types";
 import type { DiagramSpec } from "../../types";
 import { createLogger } from "../../logging";
 import { circuitBreakers, CircuitBreakerError } from "../../utils/circuit-breaker";
+import { DIAGRAM_SYSTEM_PROMPT } from "../prompts";
 
 const log = createLogger("openai");
 
@@ -31,26 +32,6 @@ const DEFAULT_CONFIG = {
   maxTokens: 4096,
   temperature: 0.3,
 };
-
-// System prompt for diagram transformation (same as Anthropic)
-const DIAGRAM_SYSTEM_PROMPT = `You are Vizcraft, an expert diagram transformation agent. You analyze and modify diagrams based on natural language instructions.
-
-You work with DiagramSpec objects containing:
-- nodes: Array of {id, label, type, color, position, details}
-- edges: Array of {from, to, label, style, color}
-
-Node types: box (default), diamond (decisions), circle (events), database, cloud, cylinder
-Edge styles: solid (default), dashed, dotted
-
-Guidelines:
-1. Preserve existing IDs when updating nodes/edges
-2. Generate unique IDs for new elements (use descriptive names like "auth-service", "db-connection")
-3. Maintain graph connectivity - don't orphan nodes
-4. Position new nodes logically relative to existing ones
-5. Be concise in labels - use technical but readable names
-6. Always explain what changes you made
-
-Colors should be CSS hex values (#1e293b, #3b82f6, etc.)`;
 
 // OpenAI function definition for diagram transformation
 const TRANSFORM_FUNCTION: OpenAI.ChatCompletionTool = {
