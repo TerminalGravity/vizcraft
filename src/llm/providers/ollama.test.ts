@@ -7,6 +7,7 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn } from "bun:test";
 import { OllamaProvider, createOllamaProvider } from "./ollama";
 import type { DiagramTransformRequest } from "../types";
+import { circuitBreakers } from "../../utils/circuit-breaker";
 
 // Mock diagram for testing
 const mockDiagram = {
@@ -55,6 +56,8 @@ describe("OllamaProvider", () => {
 
   beforeEach(() => {
     originalFetch = global.fetch;
+    // Reset circuit breaker state to prevent test pollution
+    circuitBreakers.llm.reset();
   });
 
   afterEach(() => {
