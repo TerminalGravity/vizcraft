@@ -188,7 +188,7 @@ describe("Metrics", () => {
       expect(histograms.get("http_request_duration_ms")).toBeDefined();
     });
 
-    test("normalizes paths with IDs", () => {
+    test("normalizes paths with UUIDs", () => {
       trackHttpRequest(
         "GET",
         "/api/diagrams/550e8400-e29b-41d4-a716-446655440000",
@@ -203,6 +203,45 @@ describe("Metrics", () => {
 
       // Path should be normalized
       expect(values[0].labels.path).toBe("/api/diagrams/:id");
+    });
+
+    test("normalizes paths with nanoid format", () => {
+      resetMetrics();
+      // nanoid is 8-21 chars of alphanumeric + underscore/hyphen
+      trackHttpRequest("GET", "/api/diagrams/abc123_XY", 200, 50, 0, 1024);
+
+      const { counters } = getMetricValues();
+      const values = counters.get("http_requests_total")!;
+      expect(values[0].labels.path).toBe("/api/diagrams/:id");
+    });
+
+    test("normalizes paths with longer nanoid", () => {
+      resetMetrics();
+      // Typical nanoid length is ~21 chars
+      trackHttpRequest("GET", "/api/diagrams/V1StGXR8_Z5jdHi6B-myT", 200, 50, 0, 1024);
+
+      const { counters } = getMetricValues();
+      const values = counters.get("http_requests_total")!;
+      expect(values[0].labels.path).toBe("/api/diagrams/:id");
+    });
+
+    test("normalizes nested paths with IDs", () => {
+      resetMetrics();
+      trackHttpRequest("GET", "/api/diagrams/abc123XY/versions/42", 200, 50, 0, 1024);
+
+      const { counters } = getMetricValues();
+      const values = counters.get("http_requests_total")!;
+      expect(values[0].labels.path).toBe("/api/diagrams/:id/versions/:id");
+    });
+
+    test("preserves short path segments (not IDs)", () => {
+      resetMetrics();
+      // Segments shorter than 8 chars shouldn't be normalized
+      trackHttpRequest("GET", "/api/v1/list", 200, 50, 0, 1024);
+
+      const { counters } = getMetricValues();
+      const values = counters.get("http_requests_total")!;
+      expect(values[0].labels.path).toBe("/api/v1/list");
     });
   });
 

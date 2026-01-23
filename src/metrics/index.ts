@@ -353,7 +353,15 @@ export function trackHttpRequest(
   responseSize: number
 ): void {
   // Normalize path for cardinality control (replace IDs with :id)
-  const normalizedPath = path.replace(/\/[a-f0-9-]{36}/gi, "/:id").replace(/\/\d+/g, "/:id");
+  // Matches: UUIDs (36 chars), nanoid (8-21 chars with at least one digit or _-), and numeric IDs
+  const normalizedPath = path
+    .replace(/\/[a-f0-9-]{36}(?=\/|$)/gi, "/:id")  // UUID format
+    .replace(/\/[a-zA-Z0-9_-]{8,21}(?=\/|$)/g, (match) => {
+      // Only normalize if the segment contains at least one digit or underscore/hyphen
+      // This avoids matching route words like "diagrams" which are pure letters
+      return /[\d_-]/.test(match) ? "/:id" : match;
+    })
+    .replace(/\/\d+(?=\/|$)/g, "/:id");  // numeric IDs
 
   incrementCounter("http_requests_total", { method, path: normalizedPath, status: String(status) });
   observeHistogram("http_request_duration_ms", durationMs, { method, path: normalizedPath });
