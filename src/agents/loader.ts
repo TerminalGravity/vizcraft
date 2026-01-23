@@ -40,11 +40,25 @@ const getAgentsDir = () => {
   return join(dataDir, "agents");
 };
 
+/** Maximum agent config file size (1MB) to prevent DoS via large YAML */
+const MAX_AGENT_FILE_SIZE = 1024 * 1024;
+
 // Load a single agent from YAML file
 async function loadAgentFile(filepath: string): Promise<LoadedAgent | null> {
   try {
     const file = Bun.file(filepath);
     if (!(await file.exists())) return null;
+
+    // Check file size before reading to prevent DoS
+    const fileSize = file.size;
+    if (fileSize > MAX_AGENT_FILE_SIZE) {
+      log.warn("Agent config file too large, skipping", {
+        filepath,
+        size: fileSize,
+        maxSize: MAX_AGENT_FILE_SIZE,
+      });
+      return null;
+    }
 
     const content = await file.text();
     const parsed = parse(content);

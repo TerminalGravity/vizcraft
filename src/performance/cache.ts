@@ -180,10 +180,30 @@ export class LRUCache<T> {
       this.delete(key);
     }
 
+    // Reject entries that are too large for the cache entirely
+    // This prevents a single large entry from causing unbounded eviction loops
+    if (size > this.maxSizeBytes) {
+      return; // Entry too large to ever fit in cache
+    }
+
     // Batch eviction: evict multiple entries at once to reduce O(n) iterations
     // This changes amortized cost from O(n) per insert to O(1) per insert
-    if (this.cache.size >= this.maxEntries || this.currentSizeBytes + size > this.maxSizeBytes) {
+    // Loop until we have space, but cap iterations to prevent infinite loops
+    let evictionAttempts = 0;
+    const maxEvictionAttempts = 10;
+    while (
+      (this.cache.size >= this.maxEntries || this.currentSizeBytes + size > this.maxSizeBytes) &&
+      this.cache.size > 0 &&
+      evictionAttempts < maxEvictionAttempts
+    ) {
       this.evictBatch();
+      evictionAttempts++;
+    }
+
+    // After eviction attempts, if still no space, don't add the entry
+    // This bounds cache size to maxSizeBytes + size of largest allowed entry
+    if (this.currentSizeBytes + size > this.maxSizeBytes && this.cache.size > 0) {
+      return; // Still no space after eviction attempts
     }
 
     const entry: CacheEntry<T> = {
