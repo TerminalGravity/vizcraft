@@ -143,6 +143,13 @@ export class CircuitBreaker {
     this.lastFailure = Date.now();
     this.failures.push({ timestamp: Date.now(), error });
 
+    // Safety cap: prevent unbounded array growth during failure bursts
+    // Keep at most 2x the failure threshold (enough for accurate counting)
+    const maxFailures = this.config.failureThreshold * 2;
+    if (this.failures.length > maxFailures) {
+      this.failures = this.failures.slice(-maxFailures);
+    }
+
     if (this.state === "HALF_OPEN") {
       // Any failure in half-open goes back to open
       log.info("Half-open failure, reopening circuit", { name: this.config.name });

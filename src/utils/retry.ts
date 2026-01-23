@@ -281,6 +281,8 @@ export const retryPredicates = {
 
 /**
  * Sleep utility that supports abort signals
+ *
+ * Uses proper cleanup to avoid memory leaks from accumulated event listeners.
  */
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -289,12 +291,25 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       return;
     }
 
-    const timeoutId = setTimeout(resolve, ms);
+    let settled = false;
 
-    signal?.addEventListener("abort", () => {
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeoutId);
       reject(new RetryAbortedError("Sleep aborted"));
-    });
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      // Clean up abort listener to prevent memory leak
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    // Use named function so we can remove it later
+    signal?.addEventListener("abort", onAbort);
   });
 }
 

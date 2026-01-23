@@ -46,6 +46,8 @@ export const MAX_LIST_OFFSET = 10_000;
  * Execute a promise with a timeout
  * Throws TimeoutError if the operation takes too long
  *
+ * Uses proper cleanup to avoid memory leaks from pending promises.
+ *
  * @param promise - The promise to execute
  * @param timeoutMs - Timeout in milliseconds
  * @param operation - Description of the operation (for error messages)
@@ -58,24 +60,33 @@ export async function withTimeout<T>(
 ): Promise<T> {
   // Create abort controller for cleanup
   const controller = new AbortController();
-  const { signal } = controller;
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let cleanupTimeout: (() => void) | undefined;
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
+  // Create a timeout promise that can be cleaned up
+  const timeoutPromise = new Promise<never>((resolve, reject) => {
     timeoutId = setTimeout(() => {
       controller.abort();
       reject(new TimeoutError(operation, timeoutMs));
     }, timeoutMs);
+
+    // Store cleanup function to settle the promise when operation completes
+    // This allows the promise to be garbage collected
+    cleanupTimeout = () => {
+      clearTimeout(timeoutId);
+      // Resolve with a value that will never be used (Promise.race already settled)
+      // but allows this promise to be GC'd
+      (resolve as (value: never) => void)(undefined as never);
+    };
   });
 
   try {
     const result = await Promise.race([promise, timeoutPromise]);
     return result;
   } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+    // Clean up timeout promise to prevent memory leak
+    cleanupTimeout?.();
   }
 }
 

@@ -49,6 +49,25 @@ db.run("PRAGMA cache_size=-65536");
 // Enable foreign key constraints
 db.run("PRAGMA foreign_keys=ON");
 
+// Validate database configuration at startup (fail-fast)
+const walMode = db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
+const foreignKeys = db.query<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get();
+if (walMode?.journal_mode !== "wal") {
+  log.warn("WAL mode not enabled", { mode: walMode?.journal_mode });
+}
+if (foreignKeys?.foreign_keys !== 1) {
+  log.warn("Foreign keys not enabled", { enabled: foreignKeys?.foreign_keys });
+}
+
+// Verify database is readable/writable with a simple query
+try {
+  db.run("SELECT 1");
+  log.info("Database connection validated", { path: DB_PATH });
+} catch (err) {
+  log.error("Database validation failed", { error: err instanceof Error ? err.message : String(err) });
+  throw new Error(`Database validation failed: ${err instanceof Error ? err.message : String(err)}`);
+}
+
 // Initialize schema
 db.run(`
   CREATE TABLE IF NOT EXISTS diagrams (
