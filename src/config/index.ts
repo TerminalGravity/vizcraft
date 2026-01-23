@@ -65,6 +65,11 @@ const envSchema = z.object({
   // Security
   ALLOWED_ORIGINS: z.string().optional(),
 
+  // JWT Authentication
+  // In production, must be at least 32 characters for security
+  // In dev/test, falls back to a default (unsafe) secret
+  JWT_SECRET: z.string().min(32).optional(),
+
   // LLM Providers (optional)
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
@@ -91,6 +96,13 @@ function loadConfig() {
     });
     throw new ConfigurationError(
       `Invalid configuration: ${result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ")}`
+    );
+  }
+
+  // Fail-fast: Validate production-required settings
+  if (result.data.NODE_ENV === "production" && !result.data.JWT_SECRET) {
+    throw new ConfigurationError(
+      "JWT_SECRET is required in production (must be at least 32 characters)"
     );
   }
 
@@ -129,6 +141,16 @@ export const config = {
   web: {
     port: env.WEB_PORT,
     allowedOrigins: parseOrigins(env.ALLOWED_ORIGINS, env.NODE_ENV),
+  },
+
+  /**
+   * Security configuration
+   */
+  security: {
+    /** JWT signing secret (falls back to dev secret in non-production) */
+    jwtSecret: env.JWT_SECRET || "vizcraft-dev-secret-do-not-use-in-production",
+    /** Whether a custom JWT secret is configured */
+    jwtSecretConfigured: Boolean(env.JWT_SECRET),
   },
 
   /**

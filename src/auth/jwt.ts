@@ -5,6 +5,8 @@
  * Uses Web Crypto API for cryptographic operations.
  */
 
+import { config } from "../config";
+
 export interface JWTPayload {
   /** Subject - user identifier */
   sub: string;
@@ -40,13 +42,10 @@ function base64UrlDecode(str: string): Uint8Array {
   return new Uint8Array([...binary].map((char) => char.charCodeAt(0)));
 }
 
-// Get secret from environment with fallback for testing
+// Get secret from centralized config
+// Note: Production validation happens at startup in config/index.ts (fail-fast)
 function getSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret && process.env.NODE_ENV === "production") {
-    throw new Error("JWT_SECRET environment variable is required in production");
-  }
-  return secret || "vizcraft-dev-secret-do-not-use-in-production";
+  return config.security.jwtSecret;
 }
 
 // Import key for HMAC operations
