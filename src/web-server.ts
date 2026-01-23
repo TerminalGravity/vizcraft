@@ -43,7 +43,7 @@ import { VALID_DIAGRAM_TYPES } from "./validation/schemas";
 import { join, extname } from "path";
 import { escapeRegex } from "./utils/regex";
 import { getContentDisposition } from "./utils/content-disposition";
-import { rateLimiters } from "./api/rate-limiter";
+import { rateLimiters, stopRateLimitCleanup } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
 import { renderMetrics, trackHttpRequest, setDiagramCount } from "./metrics";
@@ -2119,6 +2119,10 @@ onShutdown("close-websockets", () => {
 
 onShutdown("collab-cleanup", () => {
   stopCollabCleanup();
+});
+
+onShutdown("rate-limiter-cleanup", () => {
+  stopRateLimitCleanup();
 });
 
 onShutdown("flush-metrics", () => {
