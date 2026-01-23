@@ -115,8 +115,25 @@ export async function loadAgents(forceReload = false): Promise<LoadedAgent[]> {
   return agents;
 }
 
+/** Pattern for valid agent IDs: alphanumeric, hyphens, underscores only */
+const AGENT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * Validate agent ID format to prevent path traversal attacks.
+ * Agent IDs must be alphanumeric with hyphens/underscores only.
+ */
+function validateAgentId(id: string): boolean {
+  return AGENT_ID_PATTERN.test(id) && id.length <= 64;
+}
+
 // Get a specific agent by ID
 export async function getAgent(id: string): Promise<LoadedAgent | null> {
+  // Validate ID format to prevent path traversal
+  if (!validateAgentId(id)) {
+    log.warn("Invalid agent ID format", { id: id.slice(0, 50) });
+    return null;
+  }
+
   // Try cache first
   if (loadedAgents.has(id)) {
     return loadedAgents.get(id) || null;

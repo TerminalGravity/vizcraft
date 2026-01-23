@@ -39,6 +39,7 @@ import {
   getSupportedExportFormats,
 } from "./templates";
 import type { DiagramSpec, DiagramType } from "./types";
+import { VALID_DIAGRAM_TYPES } from "./validation/schemas";
 import { join, extname } from "path";
 import { escapeRegex } from "./utils/regex";
 import { getContentDisposition } from "./utils/content-disposition";
@@ -1334,7 +1335,13 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
     const sinceParam = c.req.query("since");
 
     const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
-    const since = sinceParam ? new Date(sinceParam) : undefined;
+    let since: Date | undefined;
+    if (sinceParam) {
+      since = new Date(sinceParam);
+      if (isNaN(since.getTime())) {
+        return validationErrorResponse(c, "Invalid date format for 'since' parameter. Use ISO 8601 format.");
+      }
+    }
 
     // Validate action parameter if provided
     const action = actionParam && isValidAuditAction(actionParam) ? actionParam : undefined;
@@ -1394,10 +1401,7 @@ app.get("/api/collab/stats", (c) => {
 // Get room info for a diagram
 app.get("/api/collab/rooms/:diagramId", (c) => {
   try {
-    const diagramId = c.req.param("diagramId");
-    if (!diagramId?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    const diagramId = validateDiagramId(c.req.param("diagramId"));
 
     const roomInfo = getRoomInfo(diagramId);
     if (!roomInfo) {
@@ -1436,10 +1440,15 @@ app.get("/api/diagram-types", (c) => {
 // Get info for specific diagram type
 app.get("/api/diagram-types/:type", (c) => {
   try {
-    const type = c.req.param("type") as DiagramType;
+    const typeParam = c.req.param("type");
+    if (!typeParam || !VALID_DIAGRAM_TYPES.has(typeParam)) {
+      throw new APIError("INVALID_TYPE", `Invalid diagram type: ${typeParam}`, 400);
+    }
+    const type = typeParam as DiagramType;
     const info = getDiagramTypeInfo(type);
     return c.json(info);
   } catch (err) {
+    if (err instanceof APIError) throw err;
     log.error("Get diagram type info failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.TYPE_INFO_FAILED);
   }
@@ -1448,10 +1457,15 @@ app.get("/api/diagram-types/:type", (c) => {
 // Get starter template for diagram type
 app.get("/api/diagram-types/:type/template", (c) => {
   try {
-    const type = c.req.param("type") as DiagramType;
+    const typeParam = c.req.param("type");
+    if (!typeParam || !VALID_DIAGRAM_TYPES.has(typeParam)) {
+      throw new APIError("INVALID_TYPE", `Invalid diagram type: ${typeParam}`, 400);
+    }
+    const type = typeParam as DiagramType;
     const template = getDiagramTemplate(type);
     return c.json({ template });
   } catch (err) {
+    if (err instanceof APIError) throw err;
     log.error("Get diagram template failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.TEMPLATE_FAILED);
   }
