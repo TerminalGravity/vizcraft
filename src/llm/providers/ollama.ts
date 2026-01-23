@@ -18,10 +18,14 @@ import type {
   DiagramTransformOutput,
 } from "../types";
 import { DiagramTransformOutputSchema } from "../types";
-import type { DiagramSpec } from "../../types";
 import { createLogger } from "../../logging";
-import { circuitBreakers, CircuitBreakerError } from "../../utils/circuit-breaker";
 import { DIAGRAM_SYSTEM_PROMPT_JSON } from "../prompts";
+import {
+  backoffDelay,
+  buildUpdatedSpec,
+  buildDiagramContext,
+  withCircuitBreaker,
+} from "./shared";
 
 const log = createLogger("ollama");
 
@@ -164,24 +168,7 @@ export class OllamaProvider implements LLMProvider {
       };
     }
 
-    // Check circuit breaker state before attempting
-    try {
-      return await circuitBreakers.llm.execute(() => this.executeTransform(request));
-    } catch (err) {
-      if (err instanceof CircuitBreakerError) {
-        log.warn("Circuit breaker open, failing fast", { retryAfter: err.retryAfter });
-        return {
-          success: false,
-          error: `LLM service temporarily unavailable. Please retry in ${err.retryAfter} seconds.`,
-        };
-      }
-      // Convert other errors to response format
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        error: errorMessage,
-      };
-    }
+    return withCircuitBreaker(() => this.executeTransform(request), log);
   }
 
   /**
@@ -191,7 +178,7 @@ export class OllamaProvider implements LLMProvider {
   private async executeTransform(request: DiagramTransformRequest): Promise<DiagramTransformResponse> {
     const { spec, prompt, context, maxRetries = 2 } = request;
 
-    // Build the prompt with JSON schema
+    // Build the prompt with JSON schema (Ollama-specific format)
     const userPrompt = this.buildPrompt(spec, prompt, context);
 
     let lastError: Error | null = null;
@@ -240,7 +227,7 @@ export class OllamaProvider implements LLMProvider {
         } catch (parseError) {
           log.error("Failed to parse JSON response", { preview: result.response.slice(0, 200) });
           if (attempt < maxRetries) {
-            await this.backoffDelay(attempt);
+            await backoffDelay(attempt);
             continue;
           }
           return {
@@ -255,7 +242,7 @@ export class OllamaProvider implements LLMProvider {
         if (!parseResult.success) {
           log.error("Invalid schema", { error: parseResult.error.message });
           if (attempt < maxRetries) {
-            await this.backoffDelay(attempt);
+            await backoffDelay(attempt);
             continue;
           }
           return {
@@ -265,29 +252,6 @@ export class OllamaProvider implements LLMProvider {
         }
 
         const output: DiagramTransformOutput = parseResult.data;
-
-        // Build the updated spec
-        const updatedSpec: DiagramSpec = {
-          ...spec,
-          nodes: output.nodes.map((node) => ({
-            id: node.id,
-            label: node.label,
-            type: node.type,
-            color: node.color,
-            position: node.position,
-            details: node.details,
-            width: node.width,
-            height: node.height,
-          })),
-          edges: output.edges.map((edge) => ({
-            id: edge.id,
-            from: edge.from,
-            to: edge.to,
-            label: edge.label,
-            style: edge.style,
-            color: edge.color,
-          })),
-        };
 
         // Calculate approximate token usage from Ollama response
         const usage = {
@@ -304,7 +268,7 @@ export class OllamaProvider implements LLMProvider {
 
         return {
           success: true,
-          spec: updatedSpec,
+          spec: buildUpdatedSpec(spec, output),
           changes: output.changes,
           usage,
         };
@@ -319,7 +283,7 @@ export class OllamaProvider implements LLMProvider {
         log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
         if (attempt < maxRetries) {
-          await this.backoffDelay(attempt);
+          await backoffDelay(attempt);
         }
       }
     }
@@ -329,59 +293,23 @@ export class OllamaProvider implements LLMProvider {
   }
 
   /**
-   * Build the prompt with diagram context and JSON schema
+   * Build the prompt with diagram context and JSON schema (Ollama-specific)
    */
   private buildPrompt(spec: DiagramSpec, prompt: string, context?: string): string {
-    const parts: string[] = [];
+    // Use shared context builder but with Ollama-specific JSON schema instruction
+    const baseContext = buildDiagramContext(spec, prompt, context);
 
-    if (context) {
-      parts.push(`Context: ${context}\n`);
-    }
-
-    parts.push("Current diagram state:");
-    parts.push("```json");
-    parts.push(
-      JSON.stringify(
-        {
-          type: spec.type,
-          theme: spec.theme,
-          nodes: spec.nodes,
-          edges: spec.edges,
-        },
-        null,
-        2
-      )
+    return (
+      baseContext +
+      "\n\nRespond with JSON matching this schema:\n" +
+      OUTPUT_SCHEMA +
+      "\n\nIMPORTANT: Return ONLY valid JSON. No explanations or markdown."
     );
-    parts.push("```\n");
-
-    parts.push(`User instruction: ${prompt}\n`);
-
-    parts.push("Respond with JSON matching this schema:");
-    parts.push(OUTPUT_SCHEMA);
-    parts.push("\nIMPORTANT: Return ONLY valid JSON. No explanations or markdown.");
-
-    return parts.join("\n");
-  }
-
-  /**
-   * Delay helper for exponential backoff
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Exponential backoff with jitter to prevent thundering herd.
-   * @param attempt - Zero-based attempt number
-   * @param baseMs - Base delay in milliseconds (default 500)
-   * @param maxMs - Maximum delay cap (default 60000)
-   */
-  private backoffDelay(attempt: number, baseMs = 500, maxMs = 60000): Promise<void> {
-    const exponential = Math.min(Math.pow(2, attempt) * baseMs, maxMs);
-    const jitter = Math.random() * 0.2 * exponential; // 0-20% jitter
-    return this.delay(exponential + jitter);
   }
 }
+
+// Import for type reference in buildPrompt
+import type { DiagramSpec } from "../../types";
 
 /**
  * Factory function to create an Ollama provider instance

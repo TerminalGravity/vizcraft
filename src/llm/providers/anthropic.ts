@@ -18,10 +18,14 @@ import type {
   DiagramTransformOutput,
 } from "../types";
 import { DiagramTransformOutputSchema } from "../types";
-import type { DiagramSpec } from "../../types";
 import { createLogger } from "../../logging";
-import { circuitBreakers, CircuitBreakerError } from "../../utils/circuit-breaker";
 import { DIAGRAM_SYSTEM_PROMPT } from "../prompts";
+import {
+  backoffDelay,
+  buildUpdatedSpec,
+  buildDiagramContext,
+  withCircuitBreaker,
+} from "./shared";
 
 const log = createLogger("anthropic");
 
@@ -81,24 +85,7 @@ export class AnthropicProvider implements LLMProvider {
       };
     }
 
-    // Check circuit breaker state before attempting
-    try {
-      return await circuitBreakers.llm.execute(() => this.executeTransform(request));
-    } catch (err) {
-      if (err instanceof CircuitBreakerError) {
-        log.warn("Circuit breaker open, failing fast", { retryAfter: err.retryAfter });
-        return {
-          success: false,
-          error: `LLM service temporarily unavailable. Please retry in ${err.retryAfter} seconds.`,
-        };
-      }
-      // Convert other errors to response format
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return {
-        success: false,
-        error: errorMessage,
-      };
-    }
+    return withCircuitBreaker(() => this.executeTransform(request), log);
   }
 
   /**
@@ -176,7 +163,9 @@ export class AnthropicProvider implements LLMProvider {
     };
 
     // Build user message with current diagram context
-    const userMessage = this.buildUserMessage(spec, prompt, context);
+    const userMessage =
+      buildDiagramContext(spec, prompt, context) +
+      "\nUse the transform_diagram tool to return the complete updated diagram with all changes applied.";
 
     let lastError: Error | null = null;
 
@@ -210,7 +199,7 @@ export class AnthropicProvider implements LLMProvider {
         if (!parseResult.success) {
           log.error("Invalid tool output", { error: parseResult.error.message });
           if (attempt < maxRetries) {
-            await this.backoffDelay(attempt); // Exponential backoff
+            await backoffDelay(attempt);
             continue;
           }
           return {
@@ -221,32 +210,9 @@ export class AnthropicProvider implements LLMProvider {
 
         const output: DiagramTransformOutput = parseResult.data;
 
-        // Build the updated spec
-        const updatedSpec: DiagramSpec = {
-          ...spec,
-          nodes: output.nodes.map((node) => ({
-            id: node.id,
-            label: node.label,
-            type: node.type,
-            color: node.color,
-            position: node.position,
-            details: node.details,
-            width: node.width,
-            height: node.height,
-          })),
-          edges: output.edges.map((edge) => ({
-            id: edge.id,
-            from: edge.from,
-            to: edge.to,
-            label: edge.label,
-            style: edge.style,
-            color: edge.color,
-          })),
-        };
-
         return {
           success: true,
-          spec: updatedSpec,
+          spec: buildUpdatedSpec(spec, output),
           changes: output.changes,
           usage: {
             inputTokens: response.usage.input_tokens,
@@ -259,60 +225,13 @@ export class AnthropicProvider implements LLMProvider {
         log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
         if (attempt < maxRetries) {
-          await this.backoffDelay(attempt);
+          await backoffDelay(attempt);
         }
       }
     }
 
     // Throw error so circuit breaker can track the failure
     throw lastError || new Error("Failed to transform diagram after retries");
-  }
-
-  private buildUserMessage(spec: DiagramSpec, prompt: string, context?: string): string {
-    const parts: string[] = [];
-
-    if (context) {
-      parts.push(`Context: ${context}\n`);
-    }
-
-    parts.push("Current diagram state:");
-    parts.push("```json");
-    parts.push(
-      JSON.stringify(
-        {
-          type: spec.type,
-          theme: spec.theme,
-          nodes: spec.nodes,
-          edges: spec.edges,
-        },
-        null,
-        2
-      )
-    );
-    parts.push("```\n");
-
-    parts.push(`Instruction: ${prompt}`);
-    parts.push(
-      "\nUse the transform_diagram tool to return the complete updated diagram with all changes applied."
-    );
-
-    return parts.join("\n");
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Exponential backoff with jitter to prevent thundering herd.
-   * @param attempt - Zero-based attempt number
-   * @param baseMs - Base delay in milliseconds (default 500)
-   * @param maxMs - Maximum delay cap (default 60000)
-   */
-  private backoffDelay(attempt: number, baseMs = 500, maxMs = 60000): Promise<void> {
-    const exponential = Math.min(Math.pow(2, attempt) * baseMs, maxMs);
-    const jitter = Math.random() * 0.2 * exponential; // 0-20% jitter
-    return this.delay(exponential + jitter);
   }
 }
 
