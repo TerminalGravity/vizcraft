@@ -41,6 +41,9 @@ import {
 import type { DiagramSpec, DiagramType } from "./types";
 import {
   VALID_DIAGRAM_TYPES,
+  CreateDiagramRequestSchema,
+  UpdateDiagramRequestSchema,
+  UpdateThumbnailRequestSchema,
   ForkDiagramRequestSchema,
   ApplyLayoutRequestSchema,
   ApplyThemeRequestSchema,
@@ -645,22 +648,19 @@ app.get("/api/diagrams/:id", (c) => {
 // Optionally accepts isPublic field - diagrams are private by default
 app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c) => {
   try {
-    const body = await c.req.json<{
+    const rawBody = await c.req.json<{
       name: string;
       project?: string;
       spec: DiagramSpec;
       isPublic?: boolean;
     }>();
 
-    if (!body.name?.trim()) {
-      return validationErrorResponse(c, "Name is required");
+    // Validate request body with schema
+    const parseResult = CreateDiagramRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid diagram request", 400);
     }
-    if (!body.spec) {
-      return validationErrorResponse(c, "Spec is required");
-    }
-    if (!body.spec.type || !body.spec.nodes) {
-      return validationErrorResponse(c, "Spec must have type and nodes");
-    }
+    const body = parseResult.data;
 
     // Get authenticated user (optional - allows anonymous diagram creation)
     const user = getCurrentUser(c);
@@ -704,11 +704,15 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
 app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
-    const body = await c.req.json<{ spec: DiagramSpec; message?: string; force?: boolean }>();
+    const rawBody = await c.req.json<{ spec: DiagramSpec; message?: string; force?: boolean }>();
 
-    if (!body.spec) {
-      return validationErrorResponse(c, "Spec is required");
+    // Validate request body with schema
+    const parseResult = UpdateDiagramRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid update request", 400);
     }
+    // Keep raw body for force flag (not in schema)
+    const body = { ...parseResult.data, force: rawBody.force };
 
     // Check diagram exists and permissions
     const existing = storage.getDiagram(id);
@@ -848,11 +852,14 @@ app.delete("/api/diagrams/:id", async (c) => {
 app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
-    const body = await c.req.json<{ thumbnail: string }>();
+    const rawBody = await c.req.json<{ thumbnail: string }>();
 
-    if (!body.thumbnail) {
-      return validationErrorResponse(c, "Thumbnail data URL required");
+    // Validate request body with schema (validates format and size limit)
+    const parseResult = UpdateThumbnailRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid thumbnail request", 400);
     }
+    const body = parseResult.data;
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
