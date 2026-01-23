@@ -44,3 +44,10 @@ export {
   PathTraversalError,
   InvalidDataUrlError,
 } from "./path-safety";
+
+// IP trust utilities for secure forwarded header handling
+export {
+  getClientIP,
+  isTrustedProxy,
+  resetTrustedCIDRsCache,
+} from "./ip-trust";

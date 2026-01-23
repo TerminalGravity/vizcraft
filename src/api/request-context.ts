@@ -9,6 +9,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, Next } from "hono";
 import { nanoid } from "nanoid";
 import { createLogger } from "../logging";
+import { getClientIP } from "../utils/ip-trust";
 
 const log = createLogger("request");
 
@@ -107,10 +108,16 @@ export function requestContext(): (
 
     // Extract client info
     const userAgent = c.req.header("User-Agent");
-    const clientIP =
-      c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() ||
-      c.req.header("X-Real-IP") ||
-      "unknown";
+
+    // Get direct connection IP from Bun's socket info
+    const directIP = (c.env as { remoteAddr?: string } | undefined)?.remoteAddr;
+
+    // Only trust forwarded headers from trusted proxies
+    const clientIP = getClientIP(
+      directIP,
+      c.req.header("X-Forwarded-For"),
+      c.req.header("X-Real-IP")
+    );
 
     // Create the context
     const context = createRequestContext(

@@ -7,6 +7,7 @@
 
 import type { Context, Next } from "hono";
 import { createLogger } from "../logging";
+import { getClientIP } from "../utils/ip-trust";
 
 const log = createLogger("rate-limiter");
 
@@ -176,14 +177,23 @@ ensureCleanupRunning();
 
 /**
  * Get client identifier from request
- * Uses X-Forwarded-For, X-Real-IP, or falls back to connection info
+ * Only trusts X-Forwarded-For and X-Real-IP headers when the
+ * direct connection is from a trusted proxy IP.
+ *
+ * Security: Without this validation, attackers can spoof their IP
+ * by setting X-Forwarded-For headers, bypassing rate limiting.
  */
 function getClientKey(c: Context): string {
-  return (
-    c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() ||
-    c.req.header("X-Real-IP") ||
-    "unknown"
-  );
+  // Get direct connection IP from Bun's socket info
+  // This is set by Hono's Bun adapter
+  const directIP = (c.env as { remoteAddr?: string } | undefined)?.remoteAddr;
+
+  // Get forwarded headers
+  const forwardedFor = c.req.header("X-Forwarded-For");
+  const realIP = c.req.header("X-Real-IP");
+
+  // Use the utility that validates trust before using forwarded headers
+  return getClientIP(directIP, forwardedFor, realIP);
 }
 
 /**
