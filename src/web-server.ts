@@ -457,7 +457,8 @@ app.get("/api/diagrams", async (c) => {
       return c.json(cached);
     }
 
-    // Use SQL-level pagination with timeout for better performance
+    // Use SQL-level pagination with permission filtering for better performance
+    // Permission filtering at SQL level ensures accurate pagination and counts
     const queryPromise = Promise.resolve().then(() => {
       const result = storage.listDiagramsPaginated({
         project,
@@ -471,29 +472,15 @@ app.get("/api/diagrams", async (c) => {
         createdBefore,
         updatedAfter,
         updatedBefore,
+        // Pass userId for SQL-level permission filtering
+        // null = anonymous user (sees only public), undefined = no filtering
+        userId: user?.id ?? null,
       });
       const projects = storage.listProjects();
       return { ...result, projects };
     });
 
-    const { data: allDiagrams, total: rawTotal, projects } = await withListTimeout(queryPromise);
-
-    // Filter diagrams based on user permissions
-    // This ensures users only see diagrams they have access to:
-    // - Diagrams they own
-    // - Public diagrams
-    // - Diagrams shared with them
-    const diagrams = allDiagrams.filter((d) => {
-      const ownership = parseOwnership(d);
-      return canRead(user, ownership);
-    });
-
-    // Adjust total count to reflect permission-filtered results
-    // Note: This is an approximation since SQL-level filtering isn't implemented yet
-    // For accurate counts, SQL-level permission filtering should be added to storage
-    const total = diagrams.length < allDiagrams.length
-      ? Math.min(rawTotal, diagrams.length + offset) // Approximate total visible
-      : rawTotal;
+    const { data: diagrams, total, projects } = await withListTimeout(queryPromise);
 
     // Calculate pagination metadata
     const totalPages = Math.ceil(total / limit);

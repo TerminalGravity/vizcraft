@@ -543,4 +543,159 @@ describe("SQL-Level Pagination", () => {
       expect(result.total).toBe(25);
     });
   });
+
+  describe("SQL-Level Permission Filtering", () => {
+    const permTestIds: string[] = [];
+    const permTestProject = "perm-filter-test";
+    const user1 = "user-perm-001";
+    const user2 = "user-perm-002";
+
+    beforeAll(() => {
+      // Create diagrams with different ownership scenarios
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "1", label: "Test" }],
+        edges: [],
+      };
+
+      // User1's private diagrams (3)
+      for (let i = 0; i < 3; i++) {
+        const d = storage.createDiagram(`User1 Private ${i}`, permTestProject, spec, {
+          ownerId: user1,
+          isPublic: false,
+        });
+        permTestIds.push(d.id);
+      }
+
+      // User1's public diagrams (2)
+      for (let i = 0; i < 2; i++) {
+        const d = storage.createDiagram(`User1 Public ${i}`, permTestProject, spec, {
+          ownerId: user1,
+          isPublic: true,
+        });
+        permTestIds.push(d.id);
+      }
+
+      // User2's private diagrams (2)
+      for (let i = 0; i < 2; i++) {
+        const d = storage.createDiagram(`User2 Private ${i}`, permTestProject, spec, {
+          ownerId: user2,
+          isPublic: false,
+        });
+        permTestIds.push(d.id);
+      }
+
+      // User2's public diagrams (1)
+      const d = storage.createDiagram("User2 Public 0", permTestProject, spec, {
+        ownerId: user2,
+        isPublic: true,
+      });
+      permTestIds.push(d.id);
+
+      // Legacy diagrams (no owner) - accessible to all (2)
+      for (let i = 0; i < 2; i++) {
+        const d = storage.createDiagram(`Legacy ${i}`, permTestProject, spec);
+        permTestIds.push(d.id);
+      }
+    });
+
+    afterAll(() => {
+      for (const id of permTestIds) {
+        storage.deleteDiagram(id);
+      }
+    });
+
+    it("filters by userId - user sees owned + public + legacy", () => {
+      // User1 should see: 3 own private + 2 own public + 1 user2 public + 2 legacy = 8
+      const result = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: user1,
+        limit: 50,
+      });
+
+      expect(result.total).toBe(8);
+      expect(result.data.length).toBe(8);
+    });
+
+    it("filters by userId - different user sees different set", () => {
+      // User2 should see: 2 own private + 1 own public + 2 user1 public + 2 legacy = 7
+      const result = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: user2,
+        limit: 50,
+      });
+
+      expect(result.total).toBe(7);
+      expect(result.data.length).toBe(7);
+    });
+
+    it("filters by null userId - anonymous sees only public + legacy", () => {
+      // Anonymous should see: 2 user1 public + 1 user2 public + 2 legacy = 5
+      const result = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: null,
+        limit: 50,
+      });
+
+      expect(result.total).toBe(5);
+      expect(result.data.length).toBe(5);
+    });
+
+    it("no filtering when userId is undefined (backward compatible)", () => {
+      // No userId filter = all diagrams (10 total)
+      const result = storage.listDiagramsPaginated({
+        project: permTestProject,
+        limit: 50,
+      });
+
+      expect(result.total).toBe(10);
+      expect(result.data.length).toBe(10);
+    });
+
+    it("pagination works correctly with permission filtering", () => {
+      // User1 sees 8 diagrams, paginate with limit 3
+      const page1 = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: user1,
+        limit: 3,
+        offset: 0,
+      });
+
+      expect(page1.total).toBe(8);
+      expect(page1.data.length).toBe(3);
+
+      const page2 = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: user1,
+        limit: 3,
+        offset: 3,
+      });
+
+      expect(page2.total).toBe(8);
+      expect(page2.data.length).toBe(3);
+
+      const page3 = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: user1,
+        limit: 3,
+        offset: 6,
+      });
+
+      expect(page3.total).toBe(8);
+      expect(page3.data.length).toBe(2); // Remaining 2
+    });
+
+    it("rejects invalid userId for defense in depth", () => {
+      // Invalid userId with SQL injection attempt
+      const result = storage.listDiagramsPaginated({
+        project: permTestProject,
+        userId: "'; DROP TABLE diagrams; --",
+        limit: 50,
+      });
+
+      // Should return empty due to validation failure
+      expect(result.total).toBe(0);
+      expect(result.data.length).toBe(0);
+    });
+  });
 });

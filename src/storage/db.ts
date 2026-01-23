@@ -681,6 +681,8 @@ export const storage = {
     createdBefore?: string;
     updatedAfter?: string;
     updatedBefore?: string;
+    /** User ID for permission filtering - if provided, only returns accessible diagrams */
+    userId?: string | null;
   } = {}): { data: Diagram[]; total: number } {
     const {
       project,
@@ -694,6 +696,7 @@ export const storage = {
       createdBefore,
       updatedAfter,
       updatedBefore,
+      userId,
     } = options;
 
     // Build WHERE conditions
@@ -756,6 +759,25 @@ export const storage = {
     if (updatedBefore) {
       conditions.push("updated_at <= ?");
       params.push(updatedBefore);
+    }
+
+    // Permission filtering at SQL level (if userId is provided)
+    // This ensures pagination counts and results only include accessible diagrams
+    if (userId !== undefined) {
+      if (userId !== null) {
+        // Validate userId to prevent pattern injection (defense in depth)
+        if (!this.validateUserId(userId)) {
+          log.error("Invalid userId for listDiagramsPaginated", { userId: userId?.slice(0, 50) });
+          return { data: [], total: 0 };
+        }
+        // User can see: owned diagrams, public diagrams, shared diagrams, or legacy (no owner)
+        const escapedUserId = escapeGlobPattern(userId);
+        conditions.push("(owner_id = ? OR owner_id IS NULL OR is_public = 1 OR shares GLOB ?)");
+        params.push(userId, `*"userId":"${escapedUserId}"*`);
+      } else {
+        // Anonymous user: only public diagrams or legacy diagrams (no owner)
+        conditions.push("(is_public = 1 OR owner_id IS NULL)");
+      }
     }
 
     const whereClause = conditions.length > 0
