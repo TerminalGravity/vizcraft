@@ -50,6 +50,7 @@ import {
 } from "./validation/schemas";
 import { join, extname } from "path";
 import { escapeRegex } from "./utils/regex";
+import { parsePagination, parseLimit, paginationPresets } from "./utils/pagination";
 import { getContentDisposition } from "./utils/content-disposition";
 import { rateLimiters, stopRateLimitCleanup } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
@@ -468,8 +469,7 @@ app.get("/api/diagrams", async (c) => {
     const updatedBefore = c.req.query("updatedBefore");
 
     // Validate and parse parameters
-    const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10), 1), 100) : 50;
-    const rawOffset = offsetParam ? Math.max(parseInt(offsetParam, 10), 0) : 0;
+    const { limit, offset: rawOffset } = parsePagination(limitParam, offsetParam);
     const types = typesParam ? typesParam.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
 
     // Validate offset bounds to prevent memory issues with large offsets
@@ -1218,10 +1218,10 @@ app.post("/api/diagrams/:id/fork", rateLimiters.diagramCreate, async (c) => {
 app.get("/api/diagrams/:id/timeline", (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
-    const limitParam = c.req.query("limit");
-    const offsetParam = c.req.query("offset");
-    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 50) : 20;
-    const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
+    const { limit, offset } = paginationPresets.versions(
+      c.req.query("limit"),
+      c.req.query("offset")
+    );
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
@@ -1413,13 +1413,12 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
       return errorFromCode(c, ApiError.ADMIN_REQUIRED);
     }
 
-    const limitParam = c.req.query("limit");
     const userId = c.req.query("userId");
     const actionParam = c.req.query("action");
     const resourceId = c.req.query("resourceId");
     const sinceParam = c.req.query("since");
 
-    const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : 50;
+    const limit = parseLimit(c.req.query("limit"));
     let since: Date | undefined;
     if (sinceParam) {
       since = new Date(sinceParam);
