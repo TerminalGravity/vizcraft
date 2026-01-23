@@ -332,21 +332,27 @@ function sanitizeId(id: string): string {
  * - # - unicode/comments
  * - ; - statement separator
  * - " - string delimiter
- * - : - label separator in some contexts
+ *
+ * Uses single-pass replacement to avoid double-escaping of HTML entities.
  */
 function sanitizeLabel(label: string): string {
-  // Replace special Mermaid characters with HTML entities or safe alternatives
-  return label
-    .replace(/\|/g, "&#124;")  // pipe
-    .replace(/\[/g, "&#91;")   // left bracket
-    .replace(/]/g, "&#93;")    // right bracket
-    .replace(/\{/g, "&#123;")  // left brace
-    .replace(/}/g, "&#125;")   // right brace
-    .replace(/</g, "&lt;")     // less than
-    .replace(/>/g, "&gt;")     // greater than
-    .replace(/#/g, "&#35;")    // hash
-    .replace(/;/g, "&#59;")    // semicolon
-    .replace(/"/g, "&quot;");  // double quote
+  // Character to HTML entity mapping
+  const escapeMap: Record<string, string> = {
+    "|": "&#124;",   // pipe
+    "[": "&#91;",    // left bracket
+    "]": "&#93;",    // right bracket
+    "{": "&#123;",   // left brace
+    "}": "&#125;",   // right brace
+    "<": "&lt;",     // less than
+    ">": "&gt;",     // greater than
+    "#": "&#35;",    // hash
+    ";": "&#59;",    // semicolon
+    "\"": "&quot;",  // double quote
+  };
+
+  // Single-pass replacement using regex with callback
+  // This prevents double-escaping of characters within generated HTML entities
+  return label.replace(/[|[\]{}><#;"]/g, (char) => escapeMap[char] ?? char);
 }
 
 /**

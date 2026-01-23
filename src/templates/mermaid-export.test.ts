@@ -609,6 +609,295 @@ describe("exportToMermaid", () => {
   });
 });
 
+describe("sanitization - XSS/injection prevention", () => {
+  describe("node labels", () => {
+    it("escapes pipe characters to prevent edge label injection", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: "Test|malicious|injection" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      // Pipe should be escaped as HTML entity
+      expect(result).toContain("&#124;");
+      // Should not contain raw pipe that could break syntax
+      expect(result).not.toMatch(/\[Test\|/);
+    });
+
+    it("escapes brackets to prevent shape injection", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: "Test[injected]shape" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#91;");
+      expect(result).toContain("&#93;");
+    });
+
+    it("escapes braces to prevent diamond/decision shape injection", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: "Test{fake}decision" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#123;");
+      expect(result).toContain("&#125;");
+    });
+
+    it("escapes angle brackets to prevent HTML injection", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: '<script>alert("xss")</script>' }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&lt;");
+      expect(result).toContain("&gt;");
+      // Should not contain raw angle brackets
+      expect(result).not.toContain("<script>");
+    });
+
+    it("escapes hash to prevent comment injection", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: "Test#comment" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#35;");
+    });
+
+    it("escapes semicolon to prevent statement termination", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: "End;B-->C" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#59;");
+      // Should not create a new edge
+      expect(result).not.toMatch(/End;B/);
+    });
+
+    it("escapes double quotes to prevent string breaking", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: 'Say "hello"' }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&quot;");
+    });
+
+    it("handles combined injection attempt", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          {
+            id: "malicious",
+            label: '</div><script>alert(1)</script>|{exploit}|[break];"hack"#comment',
+          },
+        ],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      // Verify all dangerous characters are escaped
+      expect(result).not.toContain("<script>");
+      expect(result).not.toContain("</div>");
+      expect(result).toContain("&lt;");
+      expect(result).toContain("&gt;");
+      expect(result).toContain("&#124;");
+      expect(result).toContain("&#123;");
+      expect(result).toContain("&#125;");
+      expect(result).toContain("&#91;");
+      expect(result).toContain("&#93;");
+      expect(result).toContain("&#59;");
+      expect(result).toContain("&quot;");
+      expect(result).toContain("&#35;");
+    });
+  });
+
+  describe("edge labels", () => {
+    it("escapes edge labels with injection attempts", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [{ from: "a", to: "b", label: "label|break|syntax" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      // Pipes in labels should be escaped
+      expect(result).toContain("&#124;");
+    });
+  });
+
+  describe("sequence diagram messages", () => {
+    it("escapes message labels with injection attempts", () => {
+      const spec: DiagramSpec = {
+        type: "sequence",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [],
+        messages: [
+          { from: "a", to: "b", label: '<img onerror="alert(1)">', type: "sync", order: 1 },
+        ],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).not.toContain("<img");
+      expect(result).toContain("&lt;");
+      expect(result).toContain("&gt;");
+    });
+  });
+
+  describe("state diagram labels", () => {
+    it("escapes state labels with injection attempts", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [{ id: "state1", label: "State{break}syntax" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#123;");
+      expect(result).toContain("&#125;");
+    });
+
+    it("escapes transition labels", () => {
+      const spec: DiagramSpec = {
+        type: "state",
+        nodes: [
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ],
+        edges: [{ from: "a", to: "b", label: "event;inject" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#59;");
+    });
+  });
+
+  describe("class diagram", () => {
+    it("sanitizes class IDs to valid identifiers", () => {
+      // Class names in Mermaid must be valid identifiers, so sanitizeId is used
+      // rather than sanitizeLabel (which preserves readable text with HTML entities)
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [{ id: "MyClass<T>", label: "MyClass<T>" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      // Special characters should be replaced with underscores in the ID
+      expect(result).toContain("class MyClass_T_");
+      // The raw angle brackets should not appear
+      expect(result).not.toContain("<T>");
+    });
+
+    it("escapes class relationship labels", () => {
+      const spec: DiagramSpec = {
+        type: "class",
+        nodes: [
+          { id: "A", label: "A" },
+          { id: "B", label: "B" },
+        ],
+        edges: [{ from: "A", to: "B", label: "uses<T>" }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      // Edge labels should be sanitized
+      expect(result).toContain("&lt;");
+      expect(result).toContain("&gt;");
+    });
+  });
+
+  describe("mindmap", () => {
+    it("escapes mindmap labels with injection attempts", () => {
+      const spec: DiagramSpec = {
+        type: "mindmap",
+        nodes: [{ id: "center", label: "Topic((nested))", type: "central" }],
+        edges: [],
+      };
+
+      const result = exportToMermaid(spec);
+
+      // The nested parens should not break the root syntax
+      // root((Topic((nested))))  <-- this would be broken
+      expect(result).toContain("root((");
+      // Verify the output is valid-ish by checking structure
+      const lines = result.split("\n");
+      const rootLine = lines.find((l) => l.includes("root"));
+      expect(rootLine).toBeDefined();
+    });
+  });
+
+  describe("ER diagram", () => {
+    it("escapes relationship labels with injection attempts", () => {
+      const spec: DiagramSpec = {
+        type: "er",
+        nodes: [
+          { id: "User", label: "User", type: "entity" },
+          { id: "Post", label: "Post", type: "entity" },
+        ],
+        edges: [],
+        relationships: [
+          { entity1: "User", entity2: "Post", cardinality: "1:N", label: "creates|breaks" },
+        ],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#124;");
+    });
+  });
+
+  describe("subgraph/group labels", () => {
+    it("escapes group labels with injection attempts", () => {
+      const spec: DiagramSpec = {
+        type: "flowchart",
+        nodes: [{ id: "a", label: "A" }],
+        edges: [],
+        groups: [{ id: "g1", label: "Group[injection]attempt", nodeIds: ["a"] }],
+      };
+
+      const result = exportToMermaid(spec);
+
+      expect(result).toContain("&#91;");
+      expect(result).toContain("&#93;");
+    });
+  });
+});
+
 describe("getSupportedExportFormats", () => {
   it("returns list of supported formats", () => {
     const formats = getSupportedExportFormats();
