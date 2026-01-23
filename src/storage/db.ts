@@ -1126,7 +1126,10 @@ export const storage = {
   },
 
   /**
-   * Add a share to a diagram
+   * Add a share to a diagram (atomic operation)
+   *
+   * Uses a transaction to prevent lost updates from concurrent modifications.
+   * The read-modify-write is serialized by SQLite's transaction locking.
    */
   addShare(id: string, userId: string, permission: "editor" | "viewer"): boolean {
     // Validate userId before any operation
@@ -1135,19 +1138,55 @@ export const storage = {
       return false;
     }
 
-    const diagram = this.getDiagram(id);
-    if (!diagram) return false;
+    // Wrap in transaction to ensure atomicity
+    const txn = db.transaction(() => {
+      // Read current shares within transaction (holds lock)
+      const row = db.query<{ shares: string | null }, [string]>(
+        `SELECT shares FROM diagrams WHERE id = ?`
+      ).get(id);
 
-    const shares = diagram.shares || [];
-    // Remove existing share for this user if any
-    const filtered = shares.filter((s) => s.userId !== userId);
-    filtered.push({ userId, permission });
+      if (!row) return false;
 
-    return this.updateShares(id, filtered);
+      const shares: Array<{ userId: string; permission: "editor" | "viewer" }> =
+        row.shares ? JSON.parse(row.shares) : [];
+
+      // Remove existing share for this user if any
+      const filtered = shares.filter((s) => s.userId !== userId);
+      filtered.push({ userId, permission });
+
+      // Validate all user IDs before storing
+      for (const share of filtered) {
+        if (!this.validateUserId(share.userId)) {
+          log.error("Invalid userId in share", { userId: share.userId?.slice(0, 50) });
+          return false;
+        }
+      }
+
+      // Write back within same transaction
+      const result = db.run(
+        `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(filtered), new Date().toISOString(), id]
+      );
+      return result.changes > 0;
+    });
+
+    try {
+      return txn();
+    } catch (err) {
+      log.error("addShare transaction failed", {
+        id,
+        userId: userId.slice(0, 50),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   },
 
   /**
-   * Remove a share from a diagram
+   * Remove a share from a diagram (atomic operation)
+   *
+   * Uses a transaction to prevent lost updates from concurrent modifications.
+   * The read-modify-write is serialized by SQLite's transaction locking.
    */
   removeShare(id: string, userId: string): boolean {
     // Validate userId before any operation
@@ -1156,13 +1195,38 @@ export const storage = {
       return false;
     }
 
-    const diagram = this.getDiagram(id);
-    if (!diagram) return false;
+    // Wrap in transaction to ensure atomicity
+    const txn = db.transaction(() => {
+      // Read current shares within transaction (holds lock)
+      const row = db.query<{ shares: string | null }, [string]>(
+        `SELECT shares FROM diagrams WHERE id = ?`
+      ).get(id);
 
-    const shares = diagram.shares || [];
-    const filtered = shares.filter((s) => s.userId !== userId);
+      if (!row) return false;
 
-    return this.updateShares(id, filtered);
+      const shares: Array<{ userId: string; permission: "editor" | "viewer" }> =
+        row.shares ? JSON.parse(row.shares) : [];
+
+      const filtered = shares.filter((s) => s.userId !== userId);
+
+      // Write back within same transaction
+      const result = db.run(
+        `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(filtered), new Date().toISOString(), id]
+      );
+      return result.changes > 0;
+    });
+
+    try {
+      return txn();
+    } catch (err) {
+      log.error("removeShare transaction failed", {
+        id,
+        userId: userId.slice(0, 50),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   },
 
   /**

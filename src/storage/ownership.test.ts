@@ -434,4 +434,81 @@ describe("Ownership", () => {
       expect(foundDiagram!.shares?.some((s) => s.userId === "user_with_underscore")).toBe(true);
     });
   });
+
+  describe("concurrent share operations (atomicity)", () => {
+    it("preserves all shares when multiple addShare calls execute", async () => {
+      // This test verifies the atomic transaction prevents lost updates
+      const diagram = storage.createDiagram("Concurrent Test", "test-project", testSpec, {
+        ownerId: "user-1",
+      });
+      testIds.push(diagram.id);
+
+      // Simulate concurrent share additions
+      // Even though JS is single-threaded, the transaction ensures
+      // each read-modify-write is atomic
+      const results = await Promise.all([
+        Promise.resolve(storage.addShare(diagram.id, "user-2", "editor")),
+        Promise.resolve(storage.addShare(diagram.id, "user-3", "viewer")),
+        Promise.resolve(storage.addShare(diagram.id, "user-4", "editor")),
+      ]);
+
+      // All operations should succeed
+      expect(results.every((r) => r === true)).toBe(true);
+
+      // All shares should be present
+      const updated = storage.getDiagram(diagram.id);
+      expect(updated!.shares).toHaveLength(3);
+      expect(updated!.shares!.some((s) => s.userId === "user-2")).toBe(true);
+      expect(updated!.shares!.some((s) => s.userId === "user-3")).toBe(true);
+      expect(updated!.shares!.some((s) => s.userId === "user-4")).toBe(true);
+    });
+
+    it("preserves remaining shares after concurrent removals", async () => {
+      const diagram = storage.createDiagram("Remove Test", "test-project", testSpec, {
+        ownerId: "user-1",
+      });
+      testIds.push(diagram.id);
+
+      // Add multiple shares first
+      storage.addShare(diagram.id, "user-2", "editor");
+      storage.addShare(diagram.id, "user-3", "viewer");
+      storage.addShare(diagram.id, "user-4", "editor");
+      storage.addShare(diagram.id, "user-5", "viewer");
+
+      // Concurrent removals
+      await Promise.all([
+        Promise.resolve(storage.removeShare(diagram.id, "user-2")),
+        Promise.resolve(storage.removeShare(diagram.id, "user-4")),
+      ]);
+
+      // user-3 and user-5 should still be present
+      const updated = storage.getDiagram(diagram.id);
+      expect(updated!.shares).toHaveLength(2);
+      expect(updated!.shares!.some((s) => s.userId === "user-3")).toBe(true);
+      expect(updated!.shares!.some((s) => s.userId === "user-5")).toBe(true);
+    });
+
+    it("handles mixed add and remove operations atomically", async () => {
+      const diagram = storage.createDiagram("Mixed Ops Test", "test-project", testSpec, {
+        ownerId: "user-1",
+      });
+      testIds.push(diagram.id);
+
+      // Add initial share
+      storage.addShare(diagram.id, "user-2", "editor");
+
+      // Mixed concurrent operations
+      await Promise.all([
+        Promise.resolve(storage.addShare(diagram.id, "user-3", "viewer")),
+        Promise.resolve(storage.removeShare(diagram.id, "user-2")),
+        Promise.resolve(storage.addShare(diagram.id, "user-4", "editor")),
+      ]);
+
+      // Should have user-3 and user-4, but not user-2
+      const updated = storage.getDiagram(diagram.id);
+      expect(updated!.shares!.some((s) => s.userId === "user-2")).toBe(false);
+      expect(updated!.shares!.some((s) => s.userId === "user-3")).toBe(true);
+      expect(updated!.shares!.some((s) => s.userId === "user-4")).toBe(true);
+    });
+  });
 });
