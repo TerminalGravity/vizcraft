@@ -43,11 +43,16 @@ interface ConnectionState {
   role: "admin" | "user" | "viewer" | null;
 }
 
+/** TTL for empty rooms before cleanup (30 minutes) */
+const EMPTY_ROOM_TTL_MS = 30 * 60 * 1000;
+
 class RoomManager {
   private rooms = new Map<string, Room>();
   private connections = new Map<WebSocketConnection, ConnectionState>();
   /** Reverse index: diagramId → Set of connections in that room (for O(1) broadcast) */
   private roomConnections = new Map<string, Set<WebSocketConnection>>();
+  /** Tracks when rooms became empty (diagramId → timestamp) for TTL-based cleanup */
+  private emptyRoomTimestamps = new Map<string, number>();
   private colorIndex = 0;
 
   /**
@@ -74,10 +79,18 @@ class RoomManager {
     };
     this.connections.set(ws, state);
 
-    // Set up ping interval
+    // Set up ping interval with self-cleanup
+    // If WebSocket is closed, clear the interval to prevent resource leak
     state.pingInterval = setInterval(() => {
       if (ws.readyState === 1) {
         this.send(ws, { type: "pong" });
+      } else {
+        // WebSocket is closed but handleDisconnect wasn't called
+        // Self-cleanup to prevent resource leak
+        if (state.pingInterval) {
+          clearInterval(state.pingInterval);
+          state.pingInterval = undefined;
+        }
       }
     }, COLLAB_CONFIG.PING_INTERVAL_MS);
 
@@ -133,6 +146,9 @@ class RoomManager {
       this.rooms.set(diagramId, room);
       log.debug("Room created", { diagramId });
     }
+
+    // Clear empty room timestamp since someone is joining
+    this.emptyRoomTimestamps.delete(diagramId);
 
     // Check max participants
     if (room.participants.size >= COLLAB_CONFIG.MAX_PARTICIPANTS) {
@@ -409,7 +425,7 @@ class RoomManager {
    * 2. Connections that are stale (no activity within CONNECTION_STALE_TIMEOUT_MS)
    *    This catches orphaned connections where handleDisconnect() was never called
    */
-  cleanupInactive(): { participants: number; connections: number } {
+  cleanupInactive(): { participants: number; connections: number; rooms: number } {
     let cleanedParticipants = 0;
     let cleanedConnections = 0;
     const now = Date.now();
@@ -429,9 +445,23 @@ class RoomManager {
         }
       }
 
-      // Clean up empty rooms
+      // Track when room becomes empty for TTL-based cleanup
       if (room.participants.size === 0) {
+        if (!this.emptyRoomTimestamps.has(diagramId)) {
+          this.emptyRoomTimestamps.set(diagramId, now);
+        }
+      }
+    }
+
+    // 2b. Clean up rooms that have been empty for too long
+    let cleanedRooms = 0;
+    for (const [diagramId, emptyAt] of this.emptyRoomTimestamps) {
+      if (now - emptyAt > EMPTY_ROOM_TTL_MS) {
+        // Room has been empty long enough, clean it up
         this.rooms.delete(diagramId);
+        this.roomConnections.delete(diagramId);
+        this.emptyRoomTimestamps.delete(diagramId);
+        cleanedRooms++;
       }
     }
 
@@ -462,14 +492,15 @@ class RoomManager {
       cleanedConnections++;
     }
 
-    if (cleanedParticipants > 0 || cleanedConnections > 0) {
+    if (cleanedParticipants > 0 || cleanedConnections > 0 || cleanedRooms > 0) {
       log.info("Cleanup completed", {
         inactiveParticipants: cleanedParticipants,
         staleConnections: cleanedConnections,
+        emptyRooms: cleanedRooms,
       });
     }
 
-    return { participants: cleanedParticipants, connections: cleanedConnections };
+    return { participants: cleanedParticipants, connections: cleanedConnections, rooms: cleanedRooms };
   }
 
   /**
@@ -622,7 +653,9 @@ class RoomManager {
   private getNextColor(): string {
     const colors = COLLAB_CONFIG.PARTICIPANT_COLORS;
     const color = colors[this.colorIndex % colors.length] ?? colors[0] ?? "#808080";
-    this.colorIndex++;
+    // Reset colorIndex to prevent integer overflow after many participants
+    // (Number.MAX_SAFE_INTEGER would break modulo arithmetic)
+    this.colorIndex = (this.colorIndex + 1) % colors.length;
     return color;
   }
 }
