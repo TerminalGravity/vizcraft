@@ -100,6 +100,7 @@ import {
   getThumbnailCleanupStats,
 } from "./storage/thumbnails";
 import { audit, getAuditLog, getAuditStats, getAuditContext, isValidAuditAction } from "./audit";
+import { nanoidSchema } from "./api/validation";
 import { createLogger } from "./logging";
 
 const log = createLogger("web");
@@ -118,6 +119,26 @@ class APIError extends Error {
     super(message);
     this.name = "APIError";
   }
+}
+
+/**
+ * Validate diagram ID format before database query
+ * Uses nanoid schema (8-21 chars, URL-safe: A-Za-z0-9_-)
+ * @throws APIError if format is invalid
+ */
+function validateDiagramId(id: string | undefined): string {
+  if (!id?.trim()) {
+    throw new APIError("INVALID_ID", "Diagram ID is required", 400);
+  }
+  const result = nanoidSchema.safeParse(id);
+  if (!result.success) {
+    throw new APIError(
+      "INVALID_ID_FORMAT",
+      "Invalid diagram ID format. Expected 8-21 alphanumeric characters with optional underscores or hyphens.",
+      400
+    );
+  }
+  return result.data;
 }
 
 const app = new Hono();
@@ -558,10 +579,8 @@ app.get("/api/diagrams", async (c) => {
 // Get diagram with caching and version-based ETag for optimistic locking
 app.get("/api/diagrams/:id", (c) => {
   try {
-    const id = c.req.param("id");
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    // Validate ID format before DB query (prevents wasted queries on invalid IDs)
+    const id = validateDiagramId(c.req.param("id"));
 
     // Get diagram first to check permissions
     const diagram = storage.getDiagram(id);
@@ -675,7 +694,7 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
 // Use force: true in body to bypass version checking (use with caution in collaboration scenarios)
 app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const body = await c.req.json<{ spec: DiagramSpec; message?: string; force?: boolean }>();
 
     if (!body.spec) {
@@ -775,7 +794,7 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
 // Delete diagram
 app.delete("/api/diagrams/:id", async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
 
     // Check diagram exists and permissions
     const existing = storage.getDiagram(id);
@@ -819,7 +838,7 @@ app.delete("/api/diagrams/:id", async (c) => {
 // Update diagram thumbnail (saves to filesystem, body size limited)
 app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const body = await c.req.json<{ thumbnail: string }>();
 
     if (!body.thumbnail) {
@@ -859,7 +878,7 @@ app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
 // Get diagram thumbnail (serves from filesystem)
 app.get("/api/diagrams/:id/thumbnail", async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
 
     // Check if diagram exists
     if (!storage.getDiagram(id)) {
@@ -895,10 +914,7 @@ app.get("/api/diagrams/:id/thumbnail", async (c) => {
 // Get versions
 app.get("/api/diagrams/:id/versions", (c) => {
   try {
-    const id = c.req.param("id");
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    const id = validateDiagramId(c.req.param("id"));
     // Check if diagram exists
     if (!storage.getDiagram(id)) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
@@ -914,12 +930,9 @@ app.get("/api/diagrams/:id/versions", (c) => {
 // Get specific version
 app.get("/api/diagrams/:id/versions/:version", (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const versionParam = c.req.param("version");
 
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
     if (!versionParam?.trim()) {
       throw new APIError("INVALID_VERSION", "Version number is required", 400);
     }
@@ -948,12 +961,9 @@ app.get("/api/diagrams/:id/versions/:version", (c) => {
 // Restore to specific version
 app.post("/api/diagrams/:id/restore/:version", async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const versionParam = c.req.param("version");
 
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
     if (!versionParam?.trim()) {
       throw new APIError("INVALID_VERSION", "Version number is required", 400);
     }
@@ -1009,13 +1019,9 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
 // Diff between two versions
 app.get("/api/diagrams/:id/diff", (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const v1Param = c.req.query("v1");
     const v2Param = c.req.query("v2");
-
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
@@ -1082,10 +1088,7 @@ app.get("/api/diagrams/:id/diff", (c) => {
 // Fork/branch a diagram
 app.post("/api/diagrams/:id/fork", async (c) => {
   try {
-    const id = c.req.param("id");
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    const id = validateDiagramId(c.req.param("id"));
 
     const body = await c.req.json<{ name?: string; project?: string }>();
 
@@ -1137,15 +1140,11 @@ app.post("/api/diagrams/:id/fork", async (c) => {
 // Get version timeline with diffs (useful for history UI)
 app.get("/api/diagrams/:id/timeline", (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const limitParam = c.req.query("limit");
     const offsetParam = c.req.query("offset");
     const limit = limitParam ? Math.min(parseInt(limitParam, 10), 50) : 20;
     const offset = offsetParam ? parseInt(offsetParam, 10) : 0;
-
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
@@ -1460,10 +1459,7 @@ app.get("/api/diagram-types/:type/template", (c) => {
 // Export diagram to Mermaid format
 app.get("/api/diagrams/:id/export/mermaid", (c) => {
   try {
-    const id = c.req.param("id");
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    const id = validateDiagramId(c.req.param("id"));
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
@@ -1581,7 +1577,7 @@ app.get("/api/layouts", (c) => {
 // Apply layout to diagram (rate limited)
 app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const body = await c.req.json<{
       algorithm: LayoutAlgorithm;
       direction?: "DOWN" | "RIGHT" | "UP" | "LEFT";
@@ -1672,7 +1668,7 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
 // Preview layout (returns positions without saving, rate limited)
 app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const body = await c.req.json<{
       algorithm: LayoutAlgorithm;
       direction?: "DOWN" | "RIGHT" | "UP" | "LEFT";
@@ -1724,7 +1720,7 @@ app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
 // Apply theme to diagram
 app.post("/api/diagrams/:id/apply-theme", async (c) => {
   try {
-    const id = c.req.param("id");
+    const id = validateDiagramId(c.req.param("id"));
     const body = await c.req.json<{ themeId: string }>();
 
     const diagram = storage.getDiagram(id);
@@ -1790,7 +1786,7 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
 // Run agent on diagram (rate limited - expensive operation)
 app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, async (c) => {
   try {
-    const diagramId = c.req.param("diagramId");
+    const diagramId = validateDiagramId(c.req.param("diagramId"));
     const agentId = c.req.param("agentId");
 
     const diagram = storage.getDiagram(diagramId);
@@ -1895,10 +1891,7 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
 // Export diagram as SVG (server-side generation, rate limited, cached)
 app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
   try {
-    const id = c.req.param("id");
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    const id = validateDiagramId(c.req.param("id"));
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
@@ -1953,10 +1946,7 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
 // Export diagram as PNG (via SVG conversion, rate limited)
 app.get("/api/diagrams/:id/export/png", rateLimiters.export, async (c) => {
   try {
-    const id = c.req.param("id");
-    if (!id?.trim()) {
-      throw new APIError("INVALID_ID", "Diagram ID is required", 400);
-    }
+    const id = validateDiagramId(c.req.param("id"));
     const diagram = storage.getDiagram(id);
     if (!diagram) {
       throw new APIError("NOT_FOUND", "Diagram not found", 404);
