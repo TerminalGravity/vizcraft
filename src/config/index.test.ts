@@ -4,6 +4,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { z } from "zod";
+import { resolve, normalize } from "path";
 
 // We can't easily test the main config (it's loaded at module import time)
 // So we test the schema validation directly
@@ -38,7 +39,15 @@ describe("Configuration Schema", () => {
     WEB_PORT: portSchema(3420),
     WEB_URL: z.string().url().optional(),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
-    DATA_DIR: z.string().min(1).default("./data"),
+    DATA_DIR: z.string().min(1).default("./data").transform((path) => {
+      // Simplified validation for tests (real version uses imported function)
+      const normalized = normalize(path);
+      const segments = normalized.split(/[/\\]/);
+      if (segments.some((seg) => seg === "..")) {
+        throw new Error(`Invalid path: path traversal detected in "${path}"`);
+      }
+      return resolve(normalized);
+    }),
     ALLOWED_ORIGINS: z.string().optional(),
     ANTHROPIC_API_KEY: z.string().optional(),
     OPENAI_API_KEY: z.string().optional(),
@@ -57,7 +66,9 @@ describe("Configuration Schema", () => {
       expect(result.PORT).toBe(8420);
       expect(result.WEB_PORT).toBe(3420);
       expect(result.NODE_ENV).toBe("development");
-      expect(result.DATA_DIR).toBe("./data");
+      // DATA_DIR is now resolved to absolute path
+      expect(result.DATA_DIR.endsWith("data")).toBe(true);
+      expect(result.DATA_DIR.startsWith("/")).toBe(true);
       expect(result.LOG_LEVEL).toBe("info");
       expect(result.DEBUG).toBe(false);
       expect(result.MEMORY_LIMIT_MB).toBe(512);
@@ -167,6 +178,81 @@ describe("Configuration Schema", () => {
       expect(() => envSchema.parse({ OLLAMA_BASE_URL: "not-a-url" })).toThrow();
     });
   });
+
+  describe("DATA_DIR security validation", () => {
+    test("accepts simple relative paths", () => {
+      const result = envSchema.parse({ DATA_DIR: "./custom-data" });
+      expect(result.DATA_DIR.endsWith("custom-data")).toBe(true);
+    });
+
+    test("accepts absolute paths", () => {
+      const result = envSchema.parse({ DATA_DIR: "/var/data/vizcraft" });
+      expect(result.DATA_DIR).toBe("/var/data/vizcraft");
+    });
+
+    test("rejects path traversal attempts", () => {
+      expect(() => envSchema.parse({ DATA_DIR: "../outside" })).toThrow("path traversal");
+      expect(() => envSchema.parse({ DATA_DIR: "data/../../../etc" })).toThrow("path traversal");
+    });
+
+    test("resolves relative paths to absolute", () => {
+      const result = envSchema.parse({ DATA_DIR: "my-data" });
+      expect(result.DATA_DIR.startsWith("/")).toBe(true);
+    });
+  });
+});
+
+describe("validateAndResolvePath helper", () => {
+  // Recreate the path validation function for testing
+  function validateAndResolvePath(inputPath: string): string {
+    const normalized = normalize(inputPath);
+    // Check for ".." as a path segment (not just substring)
+    const segments = normalized.split(/[/\\]/);
+    if (segments.some((seg) => seg === "..")) {
+      throw new Error(`Invalid path: path traversal detected in "${inputPath}"`);
+    }
+    return resolve(normalized);
+  }
+
+  test("accepts simple relative path", () => {
+    const result = validateAndResolvePath("./data");
+    expect(result).toContain("data");
+    expect(result.startsWith("/")).toBe(true); // Absolute path
+  });
+
+  test("accepts absolute path", () => {
+    const result = validateAndResolvePath("/var/data/vizcraft");
+    expect(result).toBe("/var/data/vizcraft");
+  });
+
+  test("resolves relative paths to absolute", () => {
+    const result = validateAndResolvePath("data");
+    expect(result.startsWith("/")).toBe(true);
+    expect(result.endsWith("data")).toBe(true);
+  });
+
+  test("rejects path traversal with ../", () => {
+    expect(() => validateAndResolvePath("../outside")).toThrow("path traversal detected");
+  });
+
+  test("rejects path traversal with ..\\", () => {
+    // normalize() converts backslashes on all platforms
+    expect(() => validateAndResolvePath("..\\outside")).toThrow("path traversal detected");
+  });
+
+  test("rejects hidden path traversal", () => {
+    expect(() => validateAndResolvePath("data/../../../etc/passwd")).toThrow("path traversal detected");
+  });
+
+  test("rejects nested path traversal", () => {
+    expect(() => validateAndResolvePath("data/foo/../../..")).toThrow("path traversal detected");
+  });
+
+  test("accepts path with similar but safe patterns", () => {
+    // "..." is not a traversal, just a weird directory name
+    const result = validateAndResolvePath("data/.../something");
+    expect(result).toContain("...");
+  });
 });
 
 describe("parseOrigins helper", () => {
@@ -232,5 +318,47 @@ describe("parseOrigins helper", () => {
     const result = parseOrigins("http://localhost:3420", "development");
     const count = result.filter((o) => o === "http://localhost:3420").length;
     expect(count).toBe(1);
+  });
+});
+
+describe("Production Config Validation", () => {
+  // Test production-specific validations that happen in loadConfig()
+
+  test("WEB_URL HTTPS requirement logic", () => {
+    // Simulate the validation logic from loadConfig
+    function validateWebUrl(webUrl: string | undefined, isProduction: boolean): boolean {
+      if (!isProduction || !webUrl) return true;
+
+      const url = new URL(webUrl);
+      const isLocalhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+      return url.protocol === "https:" || isLocalhost;
+    }
+
+    // HTTPS URLs should pass in production
+    expect(validateWebUrl("https://vizcraft.example.com", true)).toBe(true);
+
+    // HTTP URLs should fail in production
+    expect(validateWebUrl("http://vizcraft.example.com", true)).toBe(false);
+
+    // Localhost is exempted (for local production testing)
+    expect(validateWebUrl("http://localhost:3420", true)).toBe(true);
+    expect(validateWebUrl("http://127.0.0.1:3420", true)).toBe(true);
+
+    // Non-production allows HTTP
+    expect(validateWebUrl("http://vizcraft.example.com", false)).toBe(true);
+
+    // Undefined URL passes
+    expect(validateWebUrl(undefined, true)).toBe(true);
+  });
+
+  test("JWT_SECRET is required in production", () => {
+    function validateJwtSecret(jwtSecret: string | undefined, isProduction: boolean): boolean {
+      if (isProduction && !jwtSecret) return false;
+      return true;
+    }
+
+    expect(validateJwtSecret(undefined, true)).toBe(false);
+    expect(validateJwtSecret("a-very-long-secret-key-at-least-32-chars", true)).toBe(true);
+    expect(validateJwtSecret(undefined, false)).toBe(true); // Dev allows fallback
   });
 });

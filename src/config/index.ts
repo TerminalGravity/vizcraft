@@ -10,9 +10,30 @@
  */
 
 import { z } from "zod";
+import { resolve, normalize } from "path";
 import { createLogger } from "../logging";
 
 const log = createLogger("config");
+
+/**
+ * Validate that a path doesn't contain traversal sequences
+ * and resolve it to an absolute path
+ */
+function validateAndResolvePath(inputPath: string): string {
+  // Normalize to catch various traversal tricks (../,  /../, etc.)
+  const normalized = normalize(inputPath);
+
+  // Check for path traversal attempts - look for ".." as a path segment
+  // This is more precise than just checking for ".." substring
+  // as it allows directory names like "..." which are valid
+  const segments = normalized.split(/[/\\]/);
+  if (segments.some((seg) => seg === "..")) {
+    throw new Error(`Invalid path: path traversal detected in "${inputPath}"`);
+  }
+
+  // Resolve to absolute path for consistency
+  return resolve(normalized);
+}
 
 /**
  * Environment variable schema with validation
@@ -54,13 +75,17 @@ const envSchema = z.object({
   // Server configuration
   PORT: portSchema(8420),
   WEB_PORT: portSchema(3420),
-  WEB_URL: z.string().url().optional(),
+  WEB_URL: z.string().url().optional(),  // HTTPS validation done in loadConfig()
 
   // Environment
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 
-  // Data storage
-  DATA_DIR: z.string().min(1).default("./data"),
+  // Data storage (validated for path traversal)
+  DATA_DIR: z
+    .string()
+    .min(1)
+    .default("./data")
+    .transform((path) => validateAndResolvePath(path)),
 
   // Security
   ALLOWED_ORIGINS: z.string().optional(),
@@ -100,10 +125,29 @@ function loadConfig() {
   }
 
   // Fail-fast: Validate production-required settings
-  if (result.data.NODE_ENV === "production" && !result.data.JWT_SECRET) {
-    throw new ConfigurationError(
-      "JWT_SECRET is required in production (must be at least 32 characters)"
-    );
+  if (result.data.NODE_ENV === "production") {
+    // JWT_SECRET is required in production
+    if (!result.data.JWT_SECRET) {
+      throw new ConfigurationError(
+        "JWT_SECRET is required in production (must be at least 32 characters)"
+      );
+    }
+
+    // WEB_URL must use HTTPS in production (unless it's localhost for testing)
+    if (result.data.WEB_URL) {
+      const url = new URL(result.data.WEB_URL);
+      const isLocalhost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+      if (url.protocol !== "https:" && !isLocalhost) {
+        throw new ConfigurationError(
+          `WEB_URL must use HTTPS in production (got: ${result.data.WEB_URL})`
+        );
+      }
+    }
+  }
+
+  // Warn when using fallback JWT secret in non-production (security reminder)
+  if (!result.data.JWT_SECRET && result.data.NODE_ENV !== "test") {
+    log.warn("Using insecure default JWT secret - do NOT deploy to production without setting JWT_SECRET");
   }
 
   return result.data;
