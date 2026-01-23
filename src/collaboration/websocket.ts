@@ -19,15 +19,20 @@ import { createLogger } from "../logging";
 
 const log = createLogger("collab-ws");
 
-// WebSocket data includes authentication info
-interface WebSocketData {
+/**
+ * WebSocket data includes authentication info
+ */
+export interface WebSocketData {
   participantId?: string;
   userId?: string | null;
   role?: "admin" | "user" | "viewer" | null;
 }
 
-// Track WebSocket to ServerWebSocket mapping for Bun
-type BunWebSocket = {
+/**
+ * Bun WebSocket interface for collaboration handlers
+ * Provides a typed interface for Bun's ServerWebSocket
+ */
+export type BunWebSocket = {
   send: (message: string) => void;
   close: () => void;
   readyState: number;
@@ -37,7 +42,7 @@ type BunWebSocket = {
 /**
  * Bun server with WebSocket support
  */
-type BunServerWithWS = Server<WebSocketData> & {
+export type BunServerWithWS = Server<WebSocketData> & {
   upgrade: (req: Request, options?: { data?: unknown }) => boolean;
 };
 

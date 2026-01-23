@@ -30,6 +30,8 @@ import {
   broadcastDiagramSync,
   getCollabStats,
   getRoomInfo,
+  type BunWebSocket,
+  type BunServerWithWS,
 } from "./collaboration";
 import {
   listDiagramTypes,
@@ -2276,7 +2278,8 @@ Bun.serve({
     // Handle WebSocket upgrade for collaboration with authentication
     if (url.pathname === "/ws/collab") {
       // Use the authenticated WebSocket upgrade handler
-      const response = await handleWebSocketUpgrade(req, server as any);
+      // Cast through unknown to BunServerWithWS (Bun's generic server type doesn't carry the WebSocketData type)
+      const response = await handleWebSocketUpgrade(req, server as unknown as BunServerWithWS);
       if (response) {
         // Returns a response only on error (e.g., invalid token)
         return response;
@@ -2304,13 +2307,14 @@ Bun.serve({
   // WebSocket handlers for real-time collaboration
   websocket: {
     open(ws) {
-      handleWebSocketOpen(ws as any);
+      // Cast to BunWebSocket to satisfy the collaboration module's typed interface
+      handleWebSocketOpen(ws as BunWebSocket);
     },
     message(ws, message) {
-      handleWebSocketMessage(ws as any, message as string);
+      handleWebSocketMessage(ws as BunWebSocket, message as string);
     },
     close(ws) {
-      handleWebSocketClose(ws as any);
+      handleWebSocketClose(ws as BunWebSocket);
     },
     // Note: Bun's WebSocketHandler doesn't have an official 'error' callback
     // Errors are logged in the close handler if needed
