@@ -306,4 +306,108 @@ describe("Structured Logging", () => {
       expect(LOG_CONFIG).toHaveProperty("service");
     });
   });
+
+  describe("sensitive data sanitization", () => {
+    it("redacts common sensitive key names", () => {
+      logger.info("Test", {
+        password: "super-secret-123",
+        apiKey: "sk-abc123",
+        token: "bearer-xyz",
+        regularField: "safe-value",
+      });
+
+      expect(capture.logs[0].password).toBe("[REDACTED]");
+      expect(capture.logs[0].apiKey).toBe("[REDACTED]");
+      expect(capture.logs[0].token).toBe("[REDACTED]");
+      expect(capture.logs[0].regularField).toBe("safe-value");
+    });
+
+    it("redacts values that look like API keys", () => {
+      logger.info("Test", {
+        someKey: "sk-1234567890abcdefghij1234567890abcdefgh",
+        awsKey: "AKIAIOSFODNN7EXAMPLE",
+        normal: "this is just a normal string",
+      });
+
+      // OpenAI-style key should be partially redacted
+      expect(capture.logs[0].someKey).toContain("[REDACTED");
+      expect(capture.logs[0].someKey).not.toContain("1234567890abcdefghij");
+
+      // Short normal strings should pass through
+      expect(capture.logs[0].normal).toBe("this is just a normal string");
+    });
+
+    it("redacts nested sensitive fields", () => {
+      logger.info("Test", {
+        config: {
+          database: "mydb",
+          // "credentials" is a sensitive key, so whole object is redacted
+          credentials: {
+            apiKey: "secret-key-here",
+            username: "admin",
+          },
+          // Non-sensitive parent with sensitive child
+          settings: {
+            timeout: 30,
+            apiKey: "should-be-redacted",
+          },
+        },
+      });
+
+      const config = capture.logs[0].config as Record<string, unknown>;
+
+      expect(config.database).toBe("mydb");
+      // Entire credentials object is redacted because key name is sensitive
+      expect(config.credentials).toBe("[REDACTED]");
+      // Settings is not sensitive, but apiKey inside is
+      const settings = config.settings as Record<string, unknown>;
+      expect(settings.timeout).toBe(30);
+      expect(settings.apiKey).toBe("[REDACTED]");
+    });
+
+    it("handles arrays with sensitive data", () => {
+      logger.info("Test", {
+        tokens: ["token1", "token2"],
+        items: [{ name: "item1", secret: "hidden" }],
+      });
+
+      // tokens key is sensitive, so array is redacted
+      expect(capture.logs[0].tokens).toBe("[REDACTED]");
+
+      // items array with nested secret
+      const items = capture.logs[0].items as Array<Record<string, unknown>>;
+      expect(items[0].name).toBe("item1");
+      expect(items[0].secret).toBe("[REDACTED]");
+    });
+
+    it("preserves non-sensitive data exactly", () => {
+      const testData = {
+        id: 123,
+        name: "test",
+        active: true,
+        tags: ["a", "b", "c"],
+        nested: { count: 42 },
+      };
+
+      logger.info("Test", testData);
+
+      expect(capture.logs[0].id).toBe(123);
+      expect(capture.logs[0].name).toBe("test");
+      expect(capture.logs[0].active).toBe(true);
+      expect(capture.logs[0].tags).toEqual(["a", "b", "c"]);
+      expect((capture.logs[0].nested as Record<string, number>).count).toBe(42);
+    });
+
+    it("handles JWT tokens in values", () => {
+      const jwtToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+
+      logger.info("Test", {
+        authHeader: jwtToken,
+      });
+
+      // JWT should be partially redacted
+      expect(capture.logs[0].authHeader).toContain("[REDACTED");
+      expect(capture.logs[0].authHeader).not.toContain("eyJzdWIiOiIxMjM0NTY3ODkwIn0");
+    });
+  });
 });

@@ -136,6 +136,106 @@ function formatError(error: Error | unknown): Record<string, unknown> {
   return { errorValue: String(error) };
 }
 
+// ==================== Sensitive Data Sanitization ====================
+
+/**
+ * Keys that commonly contain sensitive data
+ * Case-insensitive matching
+ */
+const SENSITIVE_KEYS = new Set([
+  'password', 'passwd', 'pass', 'pwd',
+  'secret', 'secrets',
+  'token', 'tokens', 'accesstoken', 'refreshtoken', 'bearertoken',
+  'apikey', 'api_key', 'apikeys',
+  'key', 'privatekey', 'private_key', 'publickey',
+  'credential', 'credentials', 'cred',
+  'auth', 'authorization',
+  'cookie', 'cookies', 'sessionid', 'session_id',
+  'jwt', 'bearer',
+  'ssn', 'socialsecurity',
+  'credit', 'creditcard', 'card', 'cardnumber', 'cvv', 'cvc',
+]);
+
+/**
+ * Patterns that look like API keys or tokens
+ */
+const SENSITIVE_VALUE_PATTERNS = [
+  /^sk-[a-zA-Z0-9]{20,}$/,    // OpenAI API keys
+  /^sk_[a-zA-Z0-9]{20,}$/,    // Stripe keys
+  /^pk_[a-zA-Z0-9]{20,}$/,    // Stripe public keys
+  /^AKIA[A-Z0-9]{16}$/,       // AWS Access Key IDs
+  /^ghp_[a-zA-Z0-9]{36}$/,    // GitHub personal access tokens
+  /^gho_[a-zA-Z0-9]{36}$/,    // GitHub OAuth tokens
+  /^xox[baprs]-[a-zA-Z0-9-]+$/, // Slack tokens
+  /^eyJ[a-zA-Z0-9-_]+\.eyJ[a-zA-Z0-9-_]+/, // JWT tokens
+];
+
+/**
+ * Check if a key name suggests sensitive data
+ */
+function isSensitiveKey(key: string): boolean {
+  const normalizedKey = key.toLowerCase().replace(/[-_]/g, '');
+  return SENSITIVE_KEYS.has(normalizedKey);
+}
+
+/**
+ * Check if a value looks like a secret
+ */
+function isSensitiveValue(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  // Only check strings that are reasonably long (potential secrets)
+  if (value.length < 20) return false;
+  return SENSITIVE_VALUE_PATTERNS.some(pattern => pattern.test(value));
+}
+
+/**
+ * Sanitize a value for logging
+ */
+function sanitizeValue(key: string, value: unknown, depth = 0): unknown {
+  // Prevent infinite recursion
+  if (depth > 5) return '[nested too deep]';
+
+  // Check if this key should be redacted
+  if (isSensitiveKey(key)) {
+    return '[REDACTED]';
+  }
+
+  // Check if string value looks like a secret
+  if (typeof value === 'string' && isSensitiveValue(value)) {
+    // Show first and last few chars for debugging
+    const len = value.length;
+    if (len > 10) {
+      return `${value.slice(0, 4)}...${value.slice(-4)} [REDACTED ${len} chars]`;
+    }
+    return '[REDACTED]';
+  }
+
+  // Recursively sanitize objects
+  if (value !== null && typeof value === 'object') {
+    if (Array.isArray(value)) {
+      return value.map((v, i) => sanitizeValue(String(i), v, depth + 1));
+    }
+    const sanitized: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      sanitized[k] = sanitizeValue(k, v, depth + 1);
+    }
+    return sanitized;
+  }
+
+  return value;
+}
+
+/**
+ * Sanitize metadata object for safe logging
+ */
+function sanitizeMetadata(metadata: LogMetadata): LogMetadata {
+  const sanitized: LogMetadata = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    sanitized[key] = sanitizeValue(key, value);
+  }
+  return sanitized;
+}
+
 function writeLog(entry: LogEntry): void {
   const output = LOG_CONFIG.pretty
     ? JSON.stringify(entry, null, 2)
@@ -169,6 +269,9 @@ function createLoggerImpl(
         delete metadata.error;
       }
     }
+
+    // Sanitize metadata to prevent sensitive data from appearing in logs
+    metadata = sanitizeMetadata(metadata);
 
     const entry: LogEntry = {
       timestamp: new Date().toISOString(),
