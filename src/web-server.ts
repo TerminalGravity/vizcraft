@@ -71,6 +71,7 @@ import {
   onShutdown,
 } from "./api/shutdown";
 import { roomManager, stopCollabCleanup } from "./collaboration/room-manager";
+import { CircuitBreakerError } from "./utils/circuit-breaker";
 import {
   escapeXml,
   escapeAttribute,
@@ -267,6 +268,16 @@ app.onError((err, c) => {
       "REQUEST_TIMEOUT",
       `Operation timed out after ${Math.round(err.timeoutMs / 1000)}s`,
       408
+    );
+  }
+
+  if (err instanceof CircuitBreakerError) {
+    c.header("Retry-After", err.retryAfter.toString());
+    return errorResponse(
+      c,
+      "SERVICE_UNAVAILABLE",
+      err.message,
+      503
     );
   }
 
@@ -974,8 +985,8 @@ app.get("/api/diagrams/:id/versions/:version", (c) => {
   }
 });
 
-// Restore to specific version
-app.post("/api/diagrams/:id/restore/:version", async (c) => {
+// Restore to specific version (rate limited - modifies diagram)
+app.post("/api/diagrams/:id/restore/:version", rateLimiters.layout, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
     const versionParam = c.req.param("version");
@@ -1005,6 +1016,11 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
     if (!targetVersion) {
       throw new APIError("VERSION_NOT_FOUND", `Version ${versionNum} not found`, 404);
     }
+
+    // Invalidate caches BEFORE the update for stronger consistency
+    diagramCache.delete(`diagram:${id}`);
+    listCache.invalidatePattern(/^list:/);
+    svgCache.invalidatePattern(new RegExp(`^svg:${escapeRegex(id)}:`));
 
     const restored = storage.restoreVersion(id, versionNum);
     if (!restored) {
@@ -1102,8 +1118,8 @@ app.get("/api/diagrams/:id/diff", (c) => {
   }
 });
 
-// Fork/branch a diagram
-app.post("/api/diagrams/:id/fork", async (c) => {
+// Fork/branch a diagram (rate limited - creates new diagram)
+app.post("/api/diagrams/:id/fork", rateLimiters.diagramCreate, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
 
@@ -1135,6 +1151,9 @@ app.post("/api/diagrams/:id/fork", async (c) => {
     if (!forked) {
       throw new APIError("FORK_FAILED", "Failed to fork diagram", 500);
     }
+
+    // Invalidate list cache (new diagram added)
+    listCache.invalidatePattern(/^list:/);
 
     // Audit log the fork
     audit("diagram.fork", user, forked.id, {
@@ -1659,9 +1678,10 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
       throw new APIError("LAYOUT_FAILED", result.error || "Layout failed", 400);
     }
 
-    // Invalidate cache BEFORE update for stronger consistency
+    // Invalidate caches BEFORE update for stronger consistency
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
+    svgCache.invalidatePattern(new RegExp(`^svg:${escapeRegex(id)}:`));
 
     // Update diagram with new positions using safe transform (handles conflicts)
     const updateResult = storage.transformDiagram(
@@ -1761,8 +1781,8 @@ app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
   }
 });
 
-// Apply theme to diagram
-app.post("/api/diagrams/:id/apply-theme", async (c) => {
+// Apply theme to diagram (rate limited - modifies diagram)
+app.post("/api/diagrams/:id/apply-theme", rateLimiters.layout, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
     const rawBody = await c.req.json<{ themeId: string }>();
@@ -1788,9 +1808,10 @@ app.post("/api/diagrams/:id/apply-theme", async (c) => {
 
     const themeId = body.themeId;
 
-    // Invalidate cache BEFORE update for stronger consistency
+    // Invalidate caches BEFORE update for stronger consistency
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
+    svgCache.invalidatePattern(new RegExp(`^svg:${escapeRegex(id)}:`));
 
     // Use safe transform to handle concurrent modifications
     const updateResult = storage.transformDiagram(
@@ -1864,9 +1885,10 @@ app.post("/api/diagrams/:diagramId/run-agent/:agentId", rateLimiters.agentRun, a
     );
 
     if (result.success && result.spec) {
-      // Invalidate cache BEFORE update for stronger consistency
+      // Invalidate caches BEFORE update for stronger consistency
       diagramCache.delete(`diagram:${diagramId}`);
       listCache.invalidatePattern(/^list:/);
+      svgCache.invalidatePattern(new RegExp(`^svg:${escapeRegex(diagramId)}:`));
 
       // Update the diagram with version check to detect concurrent modifications
       // Note: Agent operations are expensive, so we don't retry on conflict
