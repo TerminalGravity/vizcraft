@@ -7,6 +7,7 @@
 
 import { z, type ZodSchema, type ZodError } from "zod";
 import type { Context, Next, MiddlewareHandler } from "hono";
+import { MAX_LIST_OFFSET } from "./timeout";
 
 /**
  * Standard validation error response format
@@ -237,11 +238,14 @@ export const uuidParamSchema = z.object({
 
 /**
  * Pagination query parameters
+ *
+ * Offset is capped at MAX_LIST_OFFSET to prevent memory issues
+ * with very large offsets in database queries.
  */
 export const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).optional().default(1),
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
-  offset: z.coerce.number().int().min(0).optional(),
+  offset: z.coerce.number().int().min(0).max(MAX_LIST_OFFSET).optional(),
 });
 
 /**
