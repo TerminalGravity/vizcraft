@@ -481,6 +481,10 @@ function applyDagreLayout(
   // Extract positions
   const newNodes: DiagramNode[] = spec.nodes.map((node) => {
     const layoutNode = g.node(node.id);
+    // Safety check: node might not be in graph if there's a mismatch
+    if (!layoutNode) {
+      return node; // Preserve original node if layout failed
+    }
     return {
       ...node,
       position: {
@@ -498,14 +502,17 @@ function applyDagreLayout(
 
 // Snap node positions to grid
 function snapToGrid(spec: DiagramSpec, gridSize: number): DiagramSpec {
+  // Validate grid size to prevent division errors
+  const safeGridSize = gridSize > 0 && Number.isFinite(gridSize) ? gridSize : 20;
+
   const newNodes: DiagramNode[] = spec.nodes.map((node) => {
     if (!node.position) return node;
 
     return {
       ...node,
       position: {
-        x: Math.round(node.position.x / gridSize) * gridSize,
-        y: Math.round(node.position.y / gridSize) * gridSize,
+        x: Math.round(node.position.x / safeGridSize) * safeGridSize,
+        y: Math.round(node.position.y / safeGridSize) * safeGridSize,
       },
     };
   });

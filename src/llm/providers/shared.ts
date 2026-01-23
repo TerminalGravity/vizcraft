@@ -58,12 +58,24 @@ export function buildUpdatedSpec(spec: DiagramSpec, output: DiagramTransformOutp
 /**
  * Build common diagram context message for LLM prompts.
  * Provider-specific instructions should be appended by the caller.
+ *
+ * Security Note: Prompt injection is mitigated by:
+ * 1. Zod schema validation on output (LLM can only produce valid diagram specs)
+ * 2. Limited scope (output affects diagrams only, no system access)
+ * 3. Input length limits (defense-in-depth against exfiltration attempts)
  */
+const MAX_PROMPT_LENGTH = 10000;
+const MAX_CONTEXT_LENGTH = 5000;
+
 export function buildDiagramContext(spec: DiagramSpec, prompt: string, context?: string): string {
+  // Truncate inputs to prevent excessive token usage and limit injection surface
+  const safePrompt = prompt.slice(0, MAX_PROMPT_LENGTH);
+  const safeContext = context?.slice(0, MAX_CONTEXT_LENGTH);
+
   const parts: string[] = [];
 
-  if (context) {
-    parts.push(`Context: ${context}\n`);
+  if (safeContext) {
+    parts.push(`Context: ${safeContext}\n`);
   }
 
   parts.push("Current diagram state:");
@@ -82,7 +94,7 @@ export function buildDiagramContext(spec: DiagramSpec, prompt: string, context?:
   );
   parts.push("```\n");
 
-  parts.push(`Instruction: ${prompt}`);
+  parts.push(`Instruction: ${safePrompt}`);
 
   return parts.join("\n");
 }
