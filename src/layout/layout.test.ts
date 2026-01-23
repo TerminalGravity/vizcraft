@@ -5,6 +5,7 @@
 import { describe, it, expect } from "bun:test";
 import { layoutDiagram, listLayoutAlgorithms } from "./engine";
 import { gridLayout, circularLayout } from "./simple";
+import { safePositiveNumber, safeNumber, safePosition } from "./types";
 import type { DiagramSpec } from "../types";
 
 const testSpec: DiagramSpec = {
@@ -327,5 +328,116 @@ describe("Simple Layouts", () => {
     const result = gridLayout(fiveNodeGraph, { algorithm: "grid" });
     expect(result.success).toBe(true);
     expect(Object.keys(result.positions)).toHaveLength(5);
+  });
+});
+
+describe("Layout Validation Utilities", () => {
+  describe("safePositiveNumber", () => {
+    it("returns value when valid positive number", () => {
+      expect(safePositiveNumber(50, 100)).toBe(50);
+      expect(safePositiveNumber(0, 100)).toBe(0);
+      expect(safePositiveNumber(0.5, 100)).toBe(0.5);
+    });
+
+    it("returns default for undefined", () => {
+      expect(safePositiveNumber(undefined, 100)).toBe(100);
+    });
+
+    it("returns default for negative numbers", () => {
+      expect(safePositiveNumber(-1, 100)).toBe(100);
+      expect(safePositiveNumber(-100, 50)).toBe(50);
+    });
+
+    it("returns default for NaN", () => {
+      expect(safePositiveNumber(NaN, 100)).toBe(100);
+    });
+
+    it("returns default for Infinity", () => {
+      expect(safePositiveNumber(Infinity, 100)).toBe(100);
+      expect(safePositiveNumber(-Infinity, 100)).toBe(100);
+    });
+  });
+
+  describe("safeNumber", () => {
+    it("returns value when valid finite number", () => {
+      expect(safeNumber(50, 100)).toBe(50);
+      expect(safeNumber(-50, 100)).toBe(-50);
+      expect(safeNumber(0, 100)).toBe(0);
+    });
+
+    it("returns default for undefined", () => {
+      expect(safeNumber(undefined, 100)).toBe(100);
+    });
+
+    it("returns default for NaN", () => {
+      expect(safeNumber(NaN, 100)).toBe(100);
+    });
+
+    it("returns default for Infinity", () => {
+      expect(safeNumber(Infinity, 100)).toBe(100);
+      expect(safeNumber(-Infinity, 100)).toBe(100);
+    });
+  });
+
+  describe("safePosition", () => {
+    it("returns position when valid", () => {
+      const pos = { x: 100, y: 200 };
+      expect(safePosition(pos)).toEqual(pos);
+    });
+
+    it("returns undefined for undefined input", () => {
+      expect(safePosition(undefined)).toBeUndefined();
+    });
+
+    it("returns undefined when x is NaN", () => {
+      expect(safePosition({ x: NaN, y: 100 })).toBeUndefined();
+    });
+
+    it("returns undefined when y is NaN", () => {
+      expect(safePosition({ x: 100, y: NaN })).toBeUndefined();
+    });
+
+    it("returns undefined when x is Infinity", () => {
+      expect(safePosition({ x: Infinity, y: 100 })).toBeUndefined();
+    });
+
+    it("returns undefined when y is Infinity", () => {
+      expect(safePosition({ x: 100, y: -Infinity })).toBeUndefined();
+    });
+  });
+
+  describe("Layout with invalid inputs", () => {
+    it("grid layout handles invalid spacing gracefully", () => {
+      const graph = {
+        nodes: [{ id: "a", width: 100, height: 50 }],
+        edges: [],
+      };
+      const result = gridLayout(graph, {
+        algorithm: "grid",
+        spacing: { nodeSpacing: NaN },
+        padding: Infinity,
+      });
+      expect(result.success).toBe(true);
+      // Should use default values instead of invalid ones
+      expect(Number.isFinite(result.positions["a"]?.x)).toBe(true);
+      expect(Number.isFinite(result.positions["a"]?.y)).toBe(true);
+    });
+
+    it("circular layout handles invalid padding gracefully", () => {
+      const graph = {
+        nodes: [
+          { id: "a", width: 100, height: 50 },
+          { id: "b", width: 100, height: 50 },
+        ],
+        edges: [],
+      };
+      const result = circularLayout(graph, {
+        algorithm: "circular",
+        padding: -100, // Invalid negative padding
+      });
+      expect(result.success).toBe(true);
+      expect(Number.isFinite(result.positions["a"]?.x)).toBe(true);
+      expect(Number.isFinite(result.positions["b"]?.y)).toBe(true);
+    });
   });
 });
