@@ -32,15 +32,17 @@ export function exportToMermaid(spec: DiagramSpec): string {
 
 function exportFlowchart(spec: DiagramSpec): string {
   const lines: string[] = ["flowchart TD"];
+  const nodes = spec.nodes ?? [];
+  const edges = spec.edges ?? [];
 
   // Add nodes with shapes
-  for (const node of spec.nodes) {
+  for (const node of nodes) {
     const shape = getMermaidShape(node);
     lines.push(`    ${sanitizeId(node.id)}${shape}`);
   }
 
   // Add edges
-  for (const edge of spec.edges) {
+  for (const edge of edges) {
     const from = sanitizeId(edge.from);
     const to = sanitizeId(edge.to);
     const arrow = edge.style === "dashed" ? "-.->" : "-->";
@@ -64,9 +66,10 @@ function exportFlowchart(spec: DiagramSpec): string {
 
 function exportSequence(spec: DiagramSpec): string {
   const lines: string[] = ["sequenceDiagram"];
+  const nodes = spec.nodes ?? [];
 
   // Declare participants
-  for (const node of spec.nodes) {
+  for (const node of nodes) {
     const type = node.type === "actor" ? "actor" : "participant";
     lines.push(`    ${type} ${sanitizeId(node.id)} as ${sanitizeLabel(node.label)}`);
   }
@@ -105,9 +108,11 @@ function exportSequence(spec: DiagramSpec): string {
 
 function exportStateDiagram(spec: DiagramSpec): string {
   const lines: string[] = ["stateDiagram-v2"];
+  const nodes = spec.nodes ?? [];
+  const edges = spec.edges ?? [];
 
   // Add states
-  for (const node of spec.nodes) {
+  for (const node of nodes) {
     if (node.type === "initial") {
       lines.push(`    [*] --> ${sanitizeId(node.id)}`);
     } else if (node.type === "final") {
@@ -122,10 +127,10 @@ function exportStateDiagram(spec: DiagramSpec): string {
   }
 
   // Add transitions
-  for (const edge of spec.edges) {
+  for (const edge of edges) {
     const from = sanitizeId(edge.from);
     const to = sanitizeId(edge.to);
-    const toNode = spec.nodes.find((n) => n.id === edge.to);
+    const toNode = nodes.find((n) => n.id === edge.to);
 
     if (toNode?.type === "final") {
       const label = edge.label ? `: ${sanitizeLabel(edge.label)}` : "";
@@ -141,9 +146,11 @@ function exportStateDiagram(spec: DiagramSpec): string {
 
 function exportClassDiagram(spec: DiagramSpec): string {
   const lines: string[] = ["classDiagram"];
+  const nodes = spec.nodes ?? [];
+  const edges = spec.edges ?? [];
 
   // Add classes
-  for (const node of spec.nodes) {
+  for (const node of nodes) {
     if (node.stereotype) {
       lines.push(`    class ${sanitizeId(node.id)} {`);
       lines.push(`        <<${node.stereotype}>>`);
@@ -169,7 +176,7 @@ function exportClassDiagram(spec: DiagramSpec): string {
   }
 
   // Add relationships
-  for (const edge of spec.edges) {
+  for (const edge of edges) {
     const from = sanitizeId(edge.from);
     const to = sanitizeId(edge.to);
 
@@ -196,9 +203,10 @@ function exportClassDiagram(spec: DiagramSpec): string {
 
 function exportERDiagram(spec: DiagramSpec): string {
   const lines: string[] = ["erDiagram"];
+  const nodes = spec.nodes ?? [];
 
   // Add entities with attributes
-  for (const node of spec.nodes) {
+  for (const node of nodes) {
     if (node.type === "entity" || node.type === "weak-entity") {
       lines.push(`    ${sanitizeId(node.id)} {`);
       if (node.attributes?.length) {
@@ -250,26 +258,28 @@ function exportERDiagram(spec: DiagramSpec): string {
 
 function exportMindmap(spec: DiagramSpec): string {
   const lines: string[] = ["mindmap"];
+  const nodes = spec.nodes ?? [];
+  const edges = spec.edges ?? [];
 
   // Find central node, fall back to first node if none marked as central
-  const central = spec.nodes.find((n) => n.type === "central") ?? spec.nodes[0];
+  const central = nodes.find((n) => n.type === "central") ?? nodes[0];
   if (central) {
     lines.push(`  root((${sanitizeLabel(central.label)}))`);
 
     // Build tree from edges
-    const edges = new Map<string, string[]>();
-    for (const edge of spec.edges) {
-      if (!edges.has(edge.from)) {
-        edges.set(edge.from, []);
+    const edgeMap = new Map<string, string[]>();
+    for (const edge of edges) {
+      if (!edgeMap.has(edge.from)) {
+        edgeMap.set(edge.from, []);
       }
-      edges.get(edge.from)!.push(edge.to);
+      edgeMap.get(edge.from)!.push(edge.to);
     }
 
     // Recursively add children
     const addChildren = (nodeId: string, depth: number) => {
-      const children = edges.get(nodeId) || [];
+      const children = edgeMap.get(nodeId) || [];
       for (const childId of children) {
-        const child = spec.nodes.find((n) => n.id === childId);
+        const child = nodes.find((n) => n.id === childId);
         if (child) {
           const indent = "  ".repeat(depth + 1);
           lines.push(`${indent}${sanitizeLabel(child.label)}`);
