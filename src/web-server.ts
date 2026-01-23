@@ -40,6 +40,7 @@ import {
 } from "./templates";
 import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
+import { escapeRegex } from "./utils/regex";
 import { rateLimiters } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
@@ -806,7 +807,8 @@ app.delete("/api/diagrams/:id", async (c) => {
     diagramCache.delete(`diagram:${id}`);
     listCache.invalidatePattern(/^list:/);
     // Clean up any cached SVG exports for this diagram
-    svgCache.invalidatePattern(new RegExp(`^svg:${id}:`));
+    // Use escapeRegex for defense-in-depth (even though nanoid validation prevents special chars)
+    svgCache.invalidatePattern(new RegExp(`^svg:${escapeRegex(id)}:`));
 
     const deleted = await storage.deleteDiagram(id);
     if (!deleted) {
