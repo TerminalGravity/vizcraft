@@ -9,6 +9,7 @@ import {
   DEFAULT_NODE_HEIGHT,
   DEFAULT_SPACING,
   DEFAULT_PADDING,
+  safePositiveNumber,
 } from "./types";
 import { createLogger } from "../logging";
 
@@ -25,11 +26,13 @@ export function gridLayout(
   const startTime = performance.now();
 
   try {
-    const nodeSpacing = options.spacing?.nodeSpacing ?? DEFAULT_SPACING;
-    const padding = options.padding ?? DEFAULT_PADDING;
+    // Validate numeric inputs to prevent NaN/Infinity propagation
+    const nodeSpacing = safePositiveNumber(options.spacing?.nodeSpacing, DEFAULT_SPACING);
+    const padding = safePositiveNumber(options.padding, DEFAULT_PADDING);
 
     const numNodes = graph.nodes.length;
-    const cols = Math.ceil(Math.sqrt(numNodes));
+    // Handle edge case: empty graph or single node
+    const cols = numNodes > 0 ? Math.ceil(Math.sqrt(numNodes)) : 1;
 
     const positions: Record<string, { x: number; y: number }> = {};
 
@@ -37,8 +40,9 @@ export function gridLayout(
       const col = i % cols;
       const row = Math.floor(i / cols);
 
-      const width = node.width || DEFAULT_NODE_WIDTH;
-      const height = node.height || DEFAULT_NODE_HEIGHT;
+      // Validate node dimensions
+      const width = safePositiveNumber(node.width, DEFAULT_NODE_WIDTH);
+      const height = safePositiveNumber(node.height, DEFAULT_NODE_HEIGHT);
 
       positions[node.id] = {
         x: padding + col * (width + nodeSpacing),
@@ -75,7 +79,8 @@ export function circularLayout(
   const startTime = performance.now();
 
   try {
-    const padding = options.padding ?? DEFAULT_PADDING;
+    // Validate numeric inputs
+    const padding = safePositiveNumber(options.padding, DEFAULT_PADDING);
     const numNodes = graph.nodes.length;
 
     if (numNodes === 0) {

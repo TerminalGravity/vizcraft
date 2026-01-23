@@ -19,6 +19,7 @@ import {
   DEFAULT_NODE_HEIGHT,
   DEFAULT_SPACING,
   DEFAULT_PADDING,
+  safePositiveNumber,
 } from "./types";
 import { createLogger } from "../logging";
 
@@ -60,8 +61,9 @@ export async function elkLayout(
   const startTime = performance.now();
 
   try {
-    const nodeSpacing = options.spacing?.nodeSpacing ?? DEFAULT_SPACING;
-    const layerSpacing = options.spacing?.layerSpacing ?? DEFAULT_SPACING * 1.5;
+    // Validate numeric inputs to prevent NaN/Infinity propagation
+    const nodeSpacing = safePositiveNumber(options.spacing?.nodeSpacing, DEFAULT_SPACING);
+    const layerSpacing = safePositiveNumber(options.spacing?.layerSpacing, DEFAULT_SPACING * 1.5);
 
     // Map direction to dagre rankdir
     const rankdir = mapDirectionToDagre(options.direction);
@@ -74,11 +76,11 @@ export async function elkLayout(
     g.setGraph(graphConfig);
     g.setDefaultEdgeLabel(() => ({}));
 
-    // Add nodes
+    // Add nodes with validated dimensions
     for (const node of graph.nodes) {
       g.setNode(node.id, {
-        width: node.width || DEFAULT_NODE_WIDTH,
-        height: node.height || DEFAULT_NODE_HEIGHT,
+        width: safePositiveNumber(node.width, DEFAULT_NODE_WIDTH),
+        height: safePositiveNumber(node.height, DEFAULT_NODE_HEIGHT),
         label: node.label || node.id,
       });
     }
@@ -92,10 +94,11 @@ export async function elkLayout(
     dagre.layout(g);
 
     // Extract positions and apply algorithm-specific post-processing
+    // Validate positions to prevent NaN/Infinity propagation
     const positions: Record<string, { x: number; y: number }> = {};
     for (const nodeId of g.nodes()) {
       const node = g.node(nodeId);
-      if (node) {
+      if (node && Number.isFinite(node.x) && Number.isFinite(node.y)) {
         positions[nodeId] = {
           x: node.x,
           y: node.y,
@@ -264,10 +267,12 @@ function convertToRadialLayout(
       const nodeId = nodesInLayer[i];
       if (!nodeId) continue;
       const angle = (2 * Math.PI * i) / nodesInLayer.length - Math.PI / 2;
-      radialPositions[nodeId] = {
-        x: centerX + radius * Math.cos(angle),
-        y: centerY + radius * Math.sin(angle),
-      };
+      const newX = centerX + radius * Math.cos(angle);
+      const newY = centerY + radius * Math.sin(angle);
+      // Validate computed position to prevent NaN/Infinity propagation
+      if (Number.isFinite(newX) && Number.isFinite(newY)) {
+        radialPositions[nodeId] = { x: newX, y: newY };
+      }
     }
   }
 

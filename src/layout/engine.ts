@@ -15,6 +15,7 @@ import {
   DEFAULT_NODE_WIDTH,
   DEFAULT_NODE_HEIGHT,
   DEFAULT_SPACING,
+  safePositiveNumber,
 } from "./types";
 import { elkLayout } from "./elk";
 import { gridLayout, circularLayout } from "./simple";
@@ -96,21 +97,26 @@ function dagreLayout(graph: LayoutGraph, options: LayoutOptions): LayoutResult {
   const startTime = performance.now();
 
   try {
+    // Validate numeric inputs to prevent NaN/Infinity propagation
+    const nodeSpacing = safePositiveNumber(options.spacing?.nodeSpacing, DEFAULT_SPACING);
+    const layerSpacing = safePositiveNumber(options.spacing?.layerSpacing, DEFAULT_SPACING * 1.5);
+    const padding = safePositiveNumber(options.padding, 50);
+
     const g = new dagre.graphlib.Graph();
     g.setGraph({
       rankdir: options.direction === "RIGHT" ? "LR" : "TB",
-      nodesep: options.spacing?.nodeSpacing ?? DEFAULT_SPACING,
-      ranksep: options.spacing?.layerSpacing ?? DEFAULT_SPACING * 1.5,
-      marginx: options.padding ?? 50,
-      marginy: options.padding ?? 50,
+      nodesep: nodeSpacing,
+      ranksep: layerSpacing,
+      marginx: padding,
+      marginy: padding,
     });
     g.setDefaultEdgeLabel(() => ({}));
 
-    // Add nodes
+    // Add nodes with validated dimensions
     for (const node of graph.nodes) {
       g.setNode(node.id, {
-        width: node.width || DEFAULT_NODE_WIDTH,
-        height: node.height || DEFAULT_NODE_HEIGHT,
+        width: safePositiveNumber(node.width, DEFAULT_NODE_WIDTH),
+        height: safePositiveNumber(node.height, DEFAULT_NODE_HEIGHT),
       });
     }
 
@@ -122,14 +128,16 @@ function dagreLayout(graph: LayoutGraph, options: LayoutOptions): LayoutResult {
     // Run dagre layout
     dagre.layout(g);
 
-    // Extract positions
+    // Extract positions, validating for NaN/Infinity
     const positions: Record<string, { x: number; y: number }> = {};
     for (const nodeId of g.nodes()) {
       const node = g.node(nodeId);
-      if (node) {
+      if (node && Number.isFinite(node.x) && Number.isFinite(node.y)) {
+        const width = safePositiveNumber(node.width, DEFAULT_NODE_WIDTH);
+        const height = safePositiveNumber(node.height, DEFAULT_NODE_HEIGHT);
         positions[nodeId] = {
-          x: node.x - (node.width || DEFAULT_NODE_WIDTH) / 2,
-          y: node.y - (node.height || DEFAULT_NODE_HEIGHT) / 2,
+          x: node.x - width / 2,
+          y: node.y - height / 2,
         };
       }
     }

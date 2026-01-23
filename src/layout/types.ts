@@ -57,3 +57,34 @@ export const DEFAULT_NODE_WIDTH = 150;
 export const DEFAULT_NODE_HEIGHT = 80;
 export const DEFAULT_SPACING = 50;
 export const DEFAULT_PADDING = 50;
+
+/**
+ * Validate a number is finite and non-negative, with a fallback default
+ */
+export function safePositiveNumber(value: number | undefined, defaultValue: number): number {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return defaultValue;
+  }
+  return value;
+}
+
+/**
+ * Validate a number is finite, with a fallback default
+ */
+export function safeNumber(value: number | undefined, defaultValue: number): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  return value;
+}
+
+/**
+ * Validate position object has finite coordinates
+ */
+export function safePosition(pos: { x: number; y: number } | undefined): { x: number; y: number } | undefined {
+  if (!pos) return undefined;
+  if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) {
+    return undefined;
+  }
+  return pos;
+}
