@@ -3,9 +3,26 @@
  *
  * Simple, secure JWT implementation using HMAC-SHA256.
  * Uses Web Crypto API for cryptographic operations.
+ *
+ * Security Features:
+ * - HMAC-SHA256 signing (timing-safe via Web Crypto API)
+ * - Token size limits to prevent memory exhaustion
+ * - Algorithm validation to prevent "alg: none" attacks
+ * - Issuer validation
+ * - Expiration (exp) and not-before (nbf) claim support
  */
 
 import { config } from "../config";
+
+/**
+ * Maximum token size in bytes (8KB)
+ * Prevents memory exhaustion attacks via huge tokens.
+ * A typical JWT with reasonable claims is ~500 bytes.
+ */
+export const MAX_TOKEN_SIZE = 8 * 1024;
+
+/** Supported JWT algorithm (only HS256) */
+const SUPPORTED_ALGORITHM = "HS256";
 
 export interface JWTPayload {
   /** Subject - user identifier */
@@ -16,6 +33,8 @@ export interface JWTPayload {
   iat: number;
   /** Expiration (Unix timestamp) */
   exp: number;
+  /** Not before (Unix timestamp) - token is invalid before this time */
+  nbf?: number;
   /** User role */
   role?: "admin" | "user" | "viewer";
   /** Additional claims */
@@ -63,10 +82,15 @@ async function getSigningKey(): Promise<CryptoKey> {
 
 /**
  * Sign a JWT token
+ *
+ * @param payload - Token payload (sub required, role optional)
+ * @param options - Token options
+ * @param options.expiresInSeconds - Token lifetime (default: 24 hours)
+ * @param options.notBeforeSeconds - Seconds from now until token becomes valid (default: 0)
  */
 export async function signJWT(
-  payload: Omit<JWTPayload, "iat" | "exp" | "iss">,
-  options: { expiresInSeconds?: number } = {}
+  payload: Omit<JWTPayload, "iat" | "exp" | "iss" | "nbf">,
+  options: { expiresInSeconds?: number; notBeforeSeconds?: number } = {}
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const expiresIn = options.expiresInSeconds ?? 24 * 60 * 60; // 24 hours default
@@ -80,6 +104,11 @@ export async function signJWT(
     iat: now,
     exp: now + expiresIn,
   };
+
+  // Add nbf claim if specified (token becomes valid in the future)
+  if (options.notBeforeSeconds !== undefined && options.notBeforeSeconds > 0) {
+    fullPayload.nbf = now + options.notBeforeSeconds;
+  }
 
   // Create header
   const header = { alg: "HS256", typ: "JWT" };
@@ -104,9 +133,24 @@ export async function signJWT(
 
 /**
  * Verify and decode a JWT token
+ *
+ * Security checks performed:
+ * 1. Token size limit (prevents memory exhaustion)
+ * 2. Token format validation
+ * 3. Algorithm validation (prevents "alg: none" attacks)
+ * 4. Cryptographic signature verification (timing-safe via Web Crypto)
+ * 5. Expiration check
+ * 6. Not-before check (if nbf claim present)
+ * 7. Issuer validation
  */
 export async function verifyJWT(token: string): Promise<TokenValidationResult> {
   try {
+    // Security: Check token size before any parsing
+    // Prevents memory exhaustion via huge tokens
+    if (token.length > MAX_TOKEN_SIZE) {
+      return { valid: false, error: "Token too large" };
+    }
+
     const parts = token.split(".");
     if (parts.length !== 3) {
       return { valid: false, error: "Invalid token format" };
@@ -121,7 +165,15 @@ export async function verifyJWT(token: string): Promise<TokenValidationResult> {
       return { valid: false, error: "Invalid token format" };
     }
 
-    // Verify signature
+    // Security: Validate algorithm before signature verification
+    // Prevents "alg: none" and algorithm confusion attacks
+    const headerStr = new TextDecoder().decode(base64UrlDecode(headerB64));
+    const header = JSON.parse(headerStr) as { alg?: string; typ?: string };
+    if (header.alg !== SUPPORTED_ALGORITHM) {
+      return { valid: false, error: "Unsupported algorithm" };
+    }
+
+    // Verify signature (Web Crypto's verify is timing-safe)
     const key = await getSigningKey();
     const encoder = new TextEncoder();
     const signatureBytes = base64UrlDecode(signatureB64);
@@ -145,6 +197,11 @@ export async function verifyJWT(token: string): Promise<TokenValidationResult> {
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) {
       return { valid: false, error: "Token expired" };
+    }
+
+    // Check not-before (if present)
+    if (payload.nbf !== undefined && payload.nbf > now) {
+      return { valid: false, error: "Token not yet valid" };
     }
 
     // Check issuer

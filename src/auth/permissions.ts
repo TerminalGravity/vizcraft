@@ -7,6 +7,9 @@
 
 import type { UserContext } from "./middleware";
 import type { Diagram } from "../types";
+import { createLogger } from "../logging";
+
+const log = createLogger("permissions");
 
 export type Permission = "owner" | "editor" | "viewer" | "none";
 
@@ -230,8 +233,13 @@ export function parseOwnership(
           }
         }
       }
-    } catch {
-      // Ignore invalid JSON
+    } catch (error) {
+      // Log malformed shares JSON - may indicate data corruption or tampering
+      log.warn("Failed to parse shares JSON", {
+        error: error instanceof Error ? error.message : String(error),
+        // Don't log the actual JSON to avoid leaking sensitive data in logs
+        jsonLength: sharesJson.length,
+      });
     }
   }
 

@@ -8,6 +8,20 @@
 import type { Context, Next } from "hono";
 import { verifyJWT, type JWTPayload } from "./jwt";
 
+/**
+ * Custom error for authentication failures.
+ * Enables better error handling and audit logging.
+ */
+export class AuthenticationError extends Error {
+  code = "AUTHENTICATION_REQUIRED" as const;
+  statusCode = 401 as const;
+
+  constructor(message = "User is not authenticated") {
+    super(message);
+    this.name = "AuthenticationError";
+  }
+}
+
 // Extend Hono context with user information
 declare module "hono" {
   interface ContextVariableMap {
@@ -153,12 +167,14 @@ export function getCurrentUser(c: Context): UserContext | null {
 }
 
 /**
- * Assert user is authenticated (throws if not)
+ * Assert user is authenticated (throws AuthenticationError if not)
+ *
+ * @throws {AuthenticationError} If user is not authenticated
  */
 export function assertAuthenticated(c: Context): UserContext {
   const user = c.get("user");
   if (!user) {
-    throw new Error("User is not authenticated");
+    throw new AuthenticationError();
   }
   return user;
 }
