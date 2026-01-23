@@ -39,7 +39,12 @@ import {
   getSupportedExportFormats,
 } from "./templates";
 import type { DiagramSpec, DiagramType } from "./types";
-import { VALID_DIAGRAM_TYPES } from "./validation/schemas";
+import {
+  VALID_DIAGRAM_TYPES,
+  ForkDiagramRequestSchema,
+  ApplyLayoutRequestSchema,
+  ApplyThemeRequestSchema,
+} from "./validation/schemas";
 import { join, extname } from "path";
 import { escapeRegex } from "./utils/regex";
 import { getContentDisposition } from "./utils/content-disposition";
@@ -1095,7 +1100,14 @@ app.post("/api/diagrams/:id/fork", async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
 
-    const body = await c.req.json<{ name?: string; project?: string }>();
+    const rawBody = await c.req.json<{ name?: string; project?: string }>();
+
+    // Validate request body
+    const parseResult = ForkDiagramRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid request", 400);
+    }
+    const body = parseResult.data;
 
     const original = storage.getDiagram(id);
     if (!original) {
@@ -1597,16 +1609,19 @@ app.get("/api/layouts", (c) => {
 app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
-    const body = await c.req.json<{
+    const rawBody = await c.req.json<{
       algorithm: LayoutAlgorithm;
       direction?: "DOWN" | "RIGHT" | "UP" | "LEFT";
       spacing?: { nodeSpacing?: number; edgeSpacing?: number; layerSpacing?: number };
       padding?: number;
     }>();
 
-    if (!body.algorithm) {
-      throw new APIError("MISSING_ALGORITHM", "Layout algorithm is required", 400);
+    // Validate request body with schema
+    const parseResult = ApplyLayoutRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid layout request", 400);
     }
+    const body = parseResult.data;
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
@@ -1688,16 +1703,19 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
 app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
-    const body = await c.req.json<{
+    const rawBody = await c.req.json<{
       algorithm: LayoutAlgorithm;
       direction?: "DOWN" | "RIGHT" | "UP" | "LEFT";
       spacing?: { nodeSpacing?: number; edgeSpacing?: number; layerSpacing?: number };
       padding?: number;
     }>();
 
-    if (!body.algorithm) {
-      throw new APIError("MISSING_ALGORITHM", "Layout algorithm is required", 400);
+    // Validate request body with schema
+    const parseResult = ApplyLayoutRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid layout request", 400);
     }
+    const body = parseResult.data;
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
@@ -1740,7 +1758,14 @@ app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
 app.post("/api/diagrams/:id/apply-theme", async (c) => {
   try {
     const id = validateDiagramId(c.req.param("id"));
-    const body = await c.req.json<{ themeId: string }>();
+    const rawBody = await c.req.json<{ themeId: string }>();
+
+    // Validate request body with schema
+    const parseResult = ApplyThemeRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid theme request", 400);
+    }
+    const body = parseResult.data;
 
     const diagram = storage.getDiagram(id);
     if (!diagram) {
