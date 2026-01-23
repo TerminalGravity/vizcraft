@@ -116,12 +116,13 @@ import {
 import { audit, getAuditLog, getAuditStats, getAuditContext, isValidAuditAction } from "./audit";
 import { nanoidSchema } from "./api/validation";
 import { createLogger } from "./logging";
+import { config } from "./config";
 
 const log = createLogger("web");
 
-// Configuration
-const PORT = parseInt(process.env.WEB_PORT || "3420");
-const DATA_DIR = process.env.DATA_DIR || "./data";
+// Use centralized config for ports and paths
+const PORT = config.web.port;
+const DATA_DIR = config.data.dir;
 
 // Custom error class for API errors
 class APIError extends Error {
@@ -157,10 +158,8 @@ function validateDiagramId(id: string | undefined): string {
 
 const app = new Hono();
 
-// CORS configuration
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : ["http://localhost:3420", "http://127.0.0.1:3420"];
+// CORS configuration (from centralized config)
+const ALLOWED_ORIGINS = config.web.allowedOrigins;
 
 // Maximum origin length to prevent DoS via oversized origin headers
 const MAX_ORIGIN_LENGTH = 256;

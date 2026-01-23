@@ -16,8 +16,9 @@ import { config } from "./config";
 
 const log = createLogger("mcp");
 
-const PORT = parseInt(process.env.PORT || "8420");
-const WEB_URL = process.env.WEB_URL || `http://localhost:3420`;
+// Use centralized config for ports and URLs
+const PORT = config.server.port;
+const WEB_URL = config.server.webUrl;
 
 // ==================== Error Handling ====================
 
