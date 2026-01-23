@@ -299,6 +299,103 @@ export const protectedStorage = {
     );
   },
 
+  /**
+   * Check if thumbnail exists
+   */
+  async hasThumbnail(id: string): Promise<boolean> {
+    return withProtectionAsync("SELECT", "thumbnails", () =>
+      rawStorage.hasThumbnail(id)
+    );
+  },
+
+  // ==========================================
+  // Share operations
+  // ==========================================
+
+  /**
+   * Update shares for a diagram
+   */
+  updateShares(id: string, shares: Array<{ userId: string; permission: "editor" | "viewer" }>): boolean {
+    return withProtection("UPDATE", "diagrams", () =>
+      rawStorage.updateShares(id, shares)
+    );
+  },
+
+  /**
+   * Add a share to a diagram
+   */
+  addShare(id: string, userId: string, permission: "editor" | "viewer"): boolean {
+    return withProtection("UPDATE", "diagrams", () =>
+      rawStorage.addShare(id, userId, permission)
+    );
+  },
+
+  /**
+   * Remove a share from a diagram
+   */
+  removeShare(id: string, userId: string): boolean {
+    return withProtection("UPDATE", "diagrams", () =>
+      rawStorage.removeShare(id, userId)
+    );
+  },
+
+  // ==========================================
+  // Ownership operations
+  // ==========================================
+
+  /**
+   * Update owner of a diagram
+   */
+  updateOwner(id: string, ownerId: string): boolean {
+    return withProtection("UPDATE", "diagrams", () =>
+      rawStorage.updateOwner(id, ownerId)
+    );
+  },
+
+  /**
+   * Set public/private status
+   */
+  setPublic(id: string, isPublic: boolean): boolean {
+    return withProtection("UPDATE", "diagrams", () =>
+      rawStorage.setPublic(id, isPublic)
+    );
+  },
+
+  // ==========================================
+  // User-scoped queries
+  // ==========================================
+
+  /**
+   * Count diagrams for a specific user
+   */
+  countUserDiagrams(ownerId: string): number {
+    return withProtection("SELECT", "diagrams", () =>
+      rawStorage.countUserDiagrams(ownerId)
+    );
+  },
+
+  /**
+   * List diagrams accessible to a user
+   */
+  listDiagramsForUser(options: Parameters<typeof rawStorage.listDiagramsForUser>[0]) {
+    return withProtection("SELECT", "diagrams", () =>
+      rawStorage.listDiagramsForUser(options)
+    );
+  },
+
+  /**
+   * Get version metadata without full spec (efficient for listings)
+   */
+  getVersionsMetadata(
+    diagramId: string,
+    limit: number = 20,
+    offset: number = 0
+  ): { versions: Array<{ version: number; message: string | null; created_at: string }>; total: number } {
+    return withProtection("SELECT", "diagram_versions", () =>
+      rawStorage.getVersionsMetadata(diagramId, limit, offset)
+    );
+  },
+
   // ==========================================
   // Circuit breaker management
   // ==========================================
