@@ -10,6 +10,7 @@ import { nanoid } from "nanoid";
 import type { Diagram, DiagramSpec, DiagramVersion } from "../types";
 import { safeParseSpec, VALID_DIAGRAM_TYPES } from "../validation/schemas";
 import { createLogger } from "../logging";
+import { escapeLikeWildcards } from "../utils/regex";
 
 const log = createLogger("db");
 import {
@@ -716,8 +717,9 @@ export const storage = {
       } else {
         // Fall back to LIKE for very short searches (1-2 chars)
         // Use COLLATE NOCASE for case-insensitive comparison
-        conditions.push("name LIKE ? COLLATE NOCASE");
-        params.push(`%${search}%`);
+        // Escape LIKE wildcards (% and _) to prevent wildcard injection
+        conditions.push("name LIKE ? ESCAPE '\\' COLLATE NOCASE");
+        params.push(`%${escapeLikeWildcards(search)}%`);
       }
     }
 

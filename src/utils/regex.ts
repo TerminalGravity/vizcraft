@@ -50,3 +50,26 @@ export function createPrefixPattern(prefix: string, flags?: string): RegExp {
 export function createExactPattern(str: string, flags?: string): RegExp {
   return new RegExp(`^${escapeRegex(str)}$`, flags);
 }
+
+/**
+ * Escape SQL LIKE wildcard characters in a string.
+ *
+ * Use this when constructing LIKE patterns from user input to prevent
+ * wildcard injection attacks where users could search for unintended patterns.
+ *
+ * @param str - The string to escape
+ * @returns The string with % and _ escaped with backslash
+ *
+ * @example
+ * ```ts
+ * // Safe LIKE pattern construction
+ * const userInput = "100%";
+ * const escaped = escapeLikeWildcards(userInput);
+ * // Use with: WHERE name LIKE ? ESCAPE '\\'
+ * const pattern = `%${escaped}%`; // "%100\\%%" - matches literal "100%"
+ * ```
+ */
+export function escapeLikeWildcards(str: string): string {
+  // Escape backslash first, then the wildcards
+  return str.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
+}

@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { escapeRegex, createPrefixPattern, createExactPattern } from "./regex";
+import { escapeRegex, createPrefixPattern, createExactPattern, escapeLikeWildcards } from "./regex";
 
 describe("escapeRegex", () => {
   test("returns empty string for empty input", () => {
@@ -142,5 +142,54 @@ describe("createExactPattern", () => {
     expect(pattern.test("test")).toBe(true);
     expect(pattern.test("TEST")).toBe(true);
     expect(pattern.test("Test")).toBe(true);
+  });
+});
+
+describe("escapeLikeWildcards", () => {
+  test("returns empty string for empty input", () => {
+    expect(escapeLikeWildcards("")).toBe("");
+  });
+
+  test("returns alphanumeric strings unchanged", () => {
+    expect(escapeLikeWildcards("abc123")).toBe("abc123");
+    expect(escapeLikeWildcards("TestString")).toBe("TestString");
+  });
+
+  test("escapes percent signs", () => {
+    expect(escapeLikeWildcards("100%")).toBe("100\\%");
+    expect(escapeLikeWildcards("%value%")).toBe("\\%value\\%");
+    expect(escapeLikeWildcards("a%b%c")).toBe("a\\%b\\%c");
+  });
+
+  test("escapes underscores", () => {
+    expect(escapeLikeWildcards("test_value")).toBe("test\\_value");
+    expect(escapeLikeWildcards("_prefix")).toBe("\\_prefix");
+    expect(escapeLikeWildcards("a_b_c")).toBe("a\\_b\\_c");
+  });
+
+  test("escapes backslashes", () => {
+    expect(escapeLikeWildcards("path\\file")).toBe("path\\\\file");
+    expect(escapeLikeWildcards("\\")).toBe("\\\\");
+  });
+
+  test("handles mixed wildcards", () => {
+    expect(escapeLikeWildcards("%_mix_%")).toBe("\\%\\_mix\\_\\%");
+    expect(escapeLikeWildcards("100%_done")).toBe("100\\%\\_done");
+  });
+
+  test("handles backslash followed by wildcard", () => {
+    expect(escapeLikeWildcards("\\%")).toBe("\\\\\\%");
+    expect(escapeLikeWildcards("\\_")).toBe("\\\\\\_");
+  });
+
+  test("preserves other special characters", () => {
+    expect(escapeLikeWildcards("test.value")).toBe("test.value");
+    expect(escapeLikeWildcards("a*b")).toBe("a*b");
+    expect(escapeLikeWildcards("$100")).toBe("$100");
+  });
+
+  test("handles unicode characters", () => {
+    expect(escapeLikeWildcards("test\u00e9%")).toBe("test\u00e9\\%");
+    expect(escapeLikeWildcards("\u4e2d_\u6587")).toBe("\u4e2d\\_\u6587");
   });
 });
