@@ -330,7 +330,8 @@ describe("DiagramSpecSchema", () => {
     });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues[0].message).toContain("Edges must reference existing node IDs");
+      // Error message now includes the specific node ID that was invalid
+      expect(result.error.issues[0].message).toContain("non-existent node");
     }
   });
 
@@ -631,7 +632,8 @@ describe("safeParseSpec", () => {
 
     expect(result.valid).toBe(false);
     if (!result.valid) {
-      expect(result.errors.some(e => e.includes("Edges must reference existing node IDs"))).toBe(true);
+      // Error message now includes the specific node ID
+      expect(result.errors.some(e => e.includes("non-existent node"))).toBe(true);
     }
   });
 

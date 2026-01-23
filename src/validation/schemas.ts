@@ -47,11 +47,50 @@ export const LIMITS = {
 // ==================== Base Schemas ====================
 
 /**
- * Color validation - hex color or CSS color name
+ * Valid CSS color names (CSS Level 4 + common names)
+ * Using a whitelist prevents accepting invalid names like "xyzabc"
+ */
+const CSS_COLOR_NAMES = new Set([
+  // Basic colors
+  "black", "silver", "gray", "grey", "white", "maroon", "red", "purple", "fuchsia",
+  "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua",
+  // Extended colors (most common)
+  "aliceblue", "antiquewhite", "aquamarine", "azure", "beige", "bisque", "blanchedalmond",
+  "blueviolet", "brown", "burlywood", "cadetblue", "chartreuse", "chocolate", "coral",
+  "cornflowerblue", "cornsilk", "crimson", "cyan", "darkblue", "darkcyan", "darkgoldenrod",
+  "darkgray", "darkgrey", "darkgreen", "darkkhaki", "darkmagenta", "darkolivegreen",
+  "darkorange", "darkorchid", "darkred", "darksalmon", "darkseagreen", "darkslateblue",
+  "darkslategray", "darkslategrey", "darkturquoise", "darkviolet", "deeppink", "deepskyblue",
+  "dimgray", "dimgrey", "dodgerblue", "firebrick", "floralwhite", "forestgreen",
+  "gainsboro", "ghostwhite", "gold", "goldenrod", "greenyellow", "honeydew", "hotpink",
+  "indianred", "indigo", "ivory", "khaki", "lavender", "lavenderblush", "lawngreen",
+  "lemonchiffon", "lightblue", "lightcoral", "lightcyan", "lightgoldenrodyellow",
+  "lightgray", "lightgrey", "lightgreen", "lightpink", "lightsalmon", "lightseagreen",
+  "lightskyblue", "lightslategray", "lightslategrey", "lightsteelblue", "lightyellow",
+  "limegreen", "linen", "magenta", "mediumaquamarine", "mediumblue", "mediumorchid",
+  "mediumpurple", "mediumseagreen", "mediumslateblue", "mediumspringgreen", "mediumturquoise",
+  "mediumvioletred", "midnightblue", "mintcream", "mistyrose", "moccasin", "navajowhite",
+  "oldlace", "olivedrab", "orange", "orangered", "orchid", "palegoldenrod", "palegreen",
+  "paleturquoise", "palevioletred", "papayawhip", "peachpuff", "peru", "pink", "plum",
+  "powderblue", "rebeccapurple", "rosybrown", "royalblue", "saddlebrown", "salmon",
+  "sandybrown", "seagreen", "seashell", "sienna", "skyblue", "slateblue", "slategray",
+  "slategrey", "snow", "springgreen", "steelblue", "tan", "thistle", "tomato", "turquoise",
+  "violet", "wheat", "whitesmoke", "yellowgreen",
+  // Special values
+  "transparent", "currentcolor", "inherit",
+]);
+
+/**
+ * Color validation - hex color or valid CSS color name
  */
 export const ColorSchema = z.string().refine(
-  (val) => /^#[0-9a-fA-F]{3,8}$/.test(val) || /^[a-zA-Z]+$/.test(val),
-  { message: "Invalid color format. Use hex (#RGB, #RRGGBB, #RRGGBBAA) or CSS color name" }
+  (val) => {
+    // Check hex format first (#RGB, #RRGGBB, #RRGGBBAA)
+    if (/^#[0-9a-fA-F]{3,8}$/.test(val)) return true;
+    // Check against whitelist of valid CSS color names (case-insensitive)
+    return CSS_COLOR_NAMES.has(val.toLowerCase());
+  },
+  { message: "Invalid color format. Use hex (#RGB, #RRGGBB, #RRGGBBAA) or a valid CSS color name" }
 );
 
 /**
@@ -125,7 +164,7 @@ export const ThemeSchema = z.enum(["dark", "light", "professional"]);
  */
 export const DiagramNodeSchema = z.object({
   id: z.string().min(1).max(LIMITS.ID_MAX),
-  label: z.string().max(LIMITS.LABEL_MAX),
+  label: z.string().min(1, "Node label is required").max(LIMITS.LABEL_MAX),
   type: NodeShapeSchema.optional(),
   color: ColorSchema.optional(),
   position: PositionSchema.optional(),
@@ -156,7 +195,7 @@ export const DiagramEdgeSchema = z.object({
  */
 export const DiagramGroupSchema = z.object({
   id: z.string().min(1).max(LIMITS.ID_MAX),
-  label: z.string().max(LIMITS.LABEL_MAX),
+  label: z.string().min(1, "Group label is required").max(LIMITS.LABEL_MAX),
   nodeIds: z.array(z.string().max(LIMITS.ID_MAX)).max(LIMITS.MAX_NODE_IDS_IN_GROUP),
   color: ColorSchema.optional(),
 });
@@ -202,54 +241,83 @@ export const DiagramSpecSchema = z.object({
   messages: z.array(SequenceMessageSchema).max(LIMITS.MAX_MESSAGES).optional(),
   // ER diagram specific
   relationships: z.array(ERRelationshipSchema).max(LIMITS.MAX_RELATIONSHIPS).optional(),
-}).refine(
-  (spec) => {
-    // Validate that edges reference existing nodes
-    const nodeIds = new Set(spec.nodes.map(n => n.id));
-    for (const edge of spec.edges) {
-      if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
-        return false;
-      }
+}).superRefine((spec, ctx) => {
+  // Build nodeId Set once for all reference validations (performance optimization)
+  const nodeIds = new Set(spec.nodes.map(n => n.id));
+
+  // Validate edges reference existing nodes
+  for (const edge of spec.edges) {
+    if (!nodeIds.has(edge.from)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Edge references non-existent node: "${edge.from}"`,
+        path: ["edges"],
+      });
     }
-    return true;
-  },
-  { message: "Edges must reference existing node IDs" }
-).refine(
-  (spec) => {
-    // Validate that groups reference existing nodes
-    if (!spec.groups) return true;
-    const nodeIds = new Set(spec.nodes.map(n => n.id));
+    if (!nodeIds.has(edge.to)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Edge references non-existent node: "${edge.to}"`,
+        path: ["edges"],
+      });
+    }
+  }
+
+  // Validate groups reference existing nodes
+  if (spec.groups) {
     for (const group of spec.groups) {
       for (const nodeId of group.nodeIds) {
-        if (!nodeIds.has(nodeId)) return false;
+        if (!nodeIds.has(nodeId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Group "${group.id}" references non-existent node: "${nodeId}"`,
+            path: ["groups"],
+          });
+        }
       }
     }
-    return true;
-  },
-  { message: "Groups must reference existing node IDs" }
-).refine(
-  (spec) => {
-    // Validate sequence messages reference existing nodes
-    if (!spec.messages) return true;
-    const nodeIds = new Set(spec.nodes.map(n => n.id));
+  }
+
+  // Validate sequence messages reference existing nodes
+  if (spec.messages) {
     for (const msg of spec.messages) {
-      if (!nodeIds.has(msg.from) || !nodeIds.has(msg.to)) return false;
+      if (!nodeIds.has(msg.from)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Sequence message references non-existent node: "${msg.from}"`,
+          path: ["messages"],
+        });
+      }
+      if (!nodeIds.has(msg.to)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Sequence message references non-existent node: "${msg.to}"`,
+          path: ["messages"],
+        });
+      }
     }
-    return true;
-  },
-  { message: "Sequence messages must reference existing node IDs" }
-).refine(
-  (spec) => {
-    // Validate ER relationships reference existing nodes
-    if (!spec.relationships) return true;
-    const nodeIds = new Set(spec.nodes.map(n => n.id));
+  }
+
+  // Validate ER relationships reference existing nodes
+  if (spec.relationships) {
     for (const rel of spec.relationships) {
-      if (!nodeIds.has(rel.entity1) || !nodeIds.has(rel.entity2)) return false;
+      if (!nodeIds.has(rel.entity1)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `ER relationship references non-existent entity: "${rel.entity1}"`,
+          path: ["relationships"],
+        });
+      }
+      if (!nodeIds.has(rel.entity2)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `ER relationship references non-existent entity: "${rel.entity2}"`,
+          path: ["relationships"],
+        });
+      }
     }
-    return true;
-  },
-  { message: "ER relationships must reference existing entity IDs" }
-);
+  }
+});
 
 // ==================== API Request Schemas ====================
 
@@ -282,13 +350,24 @@ export const ForkDiagramRequestSchema = z.object({
 /**
  * Update thumbnail request
  */
+/**
+ * Safe MIME types for thumbnails (no SVG - can contain scripts)
+ */
+const SAFE_THUMBNAIL_PREFIXES = [
+  "data:image/png",
+  "data:image/jpeg",
+  "data:image/jpg",
+  "data:image/webp",
+  "data:image/gif",
+];
+
 export const UpdateThumbnailRequestSchema = z.object({
   thumbnail: z.string()
     .min(1, "Thumbnail data URL is required")
     .max(LIMITS.THUMBNAIL_MAX_LENGTH, "Thumbnail too large (max 5MB)")
     .refine(
-      (val) => val.startsWith("data:image/"),
-      { message: "Thumbnail must be a valid data URL (data:image/...)" }
+      (val) => SAFE_THUMBNAIL_PREFIXES.some(prefix => val.startsWith(prefix)),
+      { message: "Thumbnail must be a valid image data URL (PNG, JPEG, WebP, or GIF)" }
     ),
 });
 
