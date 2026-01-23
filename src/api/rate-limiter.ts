@@ -228,13 +228,22 @@ function isRateLimited(key: string, config: RateLimitConfig): {
     state.lastAccess = now;
   }
 
-  // Remove requests outside the current window
-  state.requests = state.requests.filter((timestamp) => timestamp > windowStart);
+  // Remove requests outside the current window (in-place to reduce GC pressure)
+  // This is an O(n) operation but n is bounded by maxRequests
+  let writeIndex = 0;
+  for (let i = 0; i < state.requests.length; i++) {
+    const timestamp = state.requests[i];
+    if (timestamp !== undefined && timestamp > windowStart) {
+      state.requests[writeIndex++] = timestamp;
+    }
+  }
+  state.requests.length = writeIndex; // Truncate in-place
   state.windowStart = now;
 
   // Check if rate limited
   if (state.requests.length >= config.maxRequests) {
-    const oldestRequest = Math.min(...state.requests);
+    // Find oldest request - array is naturally sorted (timestamps are inserted in order)
+    const oldestRequest = state.requests[0] ?? now;
     const resetTime = oldestRequest + config.windowMs;
     return {
       limited: true,
@@ -245,6 +254,11 @@ function isRateLimited(key: string, config: RateLimitConfig): {
 
   // Record this request
   state.requests.push(now);
+
+  // Safety cap: ensure array never exceeds 2x maxRequests (should never happen, but defense-in-depth)
+  if (state.requests.length > config.maxRequests * 2) {
+    state.requests = state.requests.slice(-config.maxRequests);
+  }
 
   return {
     limited: false,
