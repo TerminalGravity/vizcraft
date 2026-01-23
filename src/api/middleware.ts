@@ -41,7 +41,7 @@ export function success<T>(c: Context, data: T, status: 200 | 201 = 200) {
 }
 
 /**
- * Standard error response
+ * Standard error response (new format for consistency)
  */
 export function error(
   c: Context,
@@ -49,7 +49,7 @@ export function error(
   message: string,
   status: 400 | 401 | 403 | 404 | 500 = 400
 ) {
-  return c.json({ error: true, message, code }, status);
+  return c.json({ error: { code, message } }, status);
 }
 
 /**
@@ -168,30 +168,41 @@ export function requireVersion(diagramId: string, version: number) {
 
 /**
  * Error handling middleware
+ * Uses standardized error format: { error: { code, message, details? } }
  */
 export function errorHandler(err: Error, c: Context) {
-  log.error("API error", { method: c.req.method, path: c.req.path, error: err.message });
+  // Include request context in logs for better audit trail
+  log.error("API error", {
+    method: c.req.method,
+    path: c.req.path,
+    error: err.message,
+    requestId: c.get("requestId") as string | undefined,
+    userId: c.get("userId") as string | undefined,
+  });
 
   if (err instanceof APIError) {
     return c.json(
-      { error: true, message: err.message, code: err.code },
+      { error: { code: err.code, message: err.message } },
       err.status as 400 | 404 | 500
     );
   }
 
   if (err instanceof SyntaxError) {
     return c.json(
-      { error: true, message: "Invalid JSON in request body", code: "INVALID_JSON" },
+      { error: { code: "INVALID_JSON", message: "Invalid JSON in request body" } },
       400
     );
   }
 
+  // Only include error details in development mode
+  const includeDetails = process.env.NODE_ENV === "development";
   return c.json(
     {
-      error: true,
-      message: "Internal server error",
-      code: "INTERNAL_ERROR",
-      ...(process.env.NODE_ENV === "development" && { details: err.message }),
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Internal server error",
+        ...(includeDetails && { details: err.message }),
+      },
     },
     500
   );
@@ -204,9 +215,10 @@ export function notFoundHandler(c: Context) {
   if (c.req.path.startsWith("/api")) {
     return c.json(
       {
-        error: true,
-        message: `API endpoint not found: ${c.req.method} ${c.req.path}`,
-        code: "NOT_FOUND",
+        error: {
+          code: "NOT_FOUND",
+          message: `API endpoint not found: ${c.req.method} ${c.req.path}`,
+        },
       },
       404
     );

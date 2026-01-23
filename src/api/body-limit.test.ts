@@ -114,7 +114,7 @@ describe("Body Limit Middleware", () => {
 
       expect(res.status).toBe(413);
       const data = await res.json();
-      expect(data.code).toBe("PAYLOAD_TOO_LARGE");
+      expect(data.error.code).toBe("PAYLOAD_TOO_LARGE");
     });
 
     it("rejects oversized JSON body", async () => {
@@ -252,9 +252,13 @@ describe("Body Limit Middleware", () => {
 
       expect(res.status).toBe(413);
       const data = await res.json();
-      expect(data.error).toBe(true);
-      expect(data.code).toBe("PAYLOAD_TOO_LARGE");
-      expect(data.maxSize).toBe(100);
+      // New standardized error format
+      expect(data.error).toBeDefined();
+      expect(data.error.code).toBe("PAYLOAD_TOO_LARGE");
+      // maxSize is only included in development mode (security)
+      if (process.env.NODE_ENV === "development") {
+        expect(data.error.maxSize).toBe(100);
+      }
     });
   });
 });

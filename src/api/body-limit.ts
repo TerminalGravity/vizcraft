@@ -129,12 +129,15 @@ export function bodyLimit(
       await next();
     } catch (err) {
       if (err instanceof BodyTooLargeError) {
+        // Only include maxSize in development mode to prevent info disclosure
+        const includeDetails = process.env.NODE_ENV === "development";
         return c.json(
           {
-            error: true,
-            code: "PAYLOAD_TOO_LARGE",
-            message: err.message,
-            maxSize: err.maxSize,
+            error: {
+              code: "PAYLOAD_TOO_LARGE",
+              message: err.message,
+              ...(includeDetails && { maxSize: err.maxSize }),
+            },
           },
           413
         );

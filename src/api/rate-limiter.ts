@@ -136,8 +136,9 @@ function performCleanup(): void {
         currentSize: rateLimitStore.size,
         maxSize: MAX_STORE_SIZE,
       });
-      // Evict least recently used entries to get below 90% capacity
-      const targetSize = Math.floor(MAX_STORE_SIZE * 0.9);
+      // Evict least recently used entries to get below 50% capacity
+      // More aggressive eviction prevents rapid refilling under attack
+      const targetSize = Math.floor(MAX_STORE_SIZE * 0.5);
       const toEvict = rateLimitStore.size - targetSize;
       deleted += evictLRUEntries(toEvict);
     }

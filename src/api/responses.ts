@@ -252,10 +252,13 @@ export function downloadResponse(
   filename: string,
   contentType: string
 ) {
+  // Sanitize filename to prevent header injection (remove quotes, newlines, control chars)
+  const sanitizedFilename = filename.replace(/["\r\n\x00-\x1f]/g, "");
+
   return new Response(content, {
     headers: {
       "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Disposition": `attachment; filename="${sanitizedFilename}"`,
       "Cache-Control": "no-cache",
     },
   });
