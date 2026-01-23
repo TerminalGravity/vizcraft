@@ -1218,8 +1218,9 @@ export const storage = {
 
       if (!row) return false;
 
-      const shares: Array<{ userId: string; permission: "editor" | "viewer" }> =
-        row.shares ? JSON.parse(row.shares) : [];
+      // Use parseShares for safe JSON parsing with validation
+      // This handles corrupted data gracefully instead of throwing
+      const shares = parseShares(row.shares);
 
       // Remove existing share for this user if any
       const filtered = shares.filter((s) => s.userId !== userId);
@@ -1244,11 +1245,21 @@ export const storage = {
     try {
       return txn();
     } catch (err) {
-      log.error("addShare transaction failed", {
-        id,
-        userId: userId.slice(0, 50),
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const isLockTimeout = errorMsg.includes("SQLITE_BUSY") || errorMsg.includes("database is locked");
+
+      if (isLockTimeout) {
+        log.warn("addShare transaction timeout (consider retry)", {
+          id,
+          userId: userId.slice(0, 50),
+        });
+      } else {
+        log.error("addShare transaction failed", {
+          id,
+          userId: userId.slice(0, 50),
+          error: errorMsg,
+        });
+      }
       return false;
     }
   },
@@ -1275,8 +1286,9 @@ export const storage = {
 
       if (!row) return false;
 
-      const shares: Array<{ userId: string; permission: "editor" | "viewer" }> =
-        row.shares ? JSON.parse(row.shares) : [];
+      // Use parseShares for safe JSON parsing with validation
+      // This handles corrupted data gracefully instead of throwing
+      const shares = parseShares(row.shares);
 
       const filtered = shares.filter((s) => s.userId !== userId);
 
@@ -1291,11 +1303,21 @@ export const storage = {
     try {
       return txn();
     } catch (err) {
-      log.error("removeShare transaction failed", {
-        id,
-        userId: userId.slice(0, 50),
-        error: err instanceof Error ? err.message : String(err),
-      });
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const isLockTimeout = errorMsg.includes("SQLITE_BUSY") || errorMsg.includes("database is locked");
+
+      if (isLockTimeout) {
+        log.warn("removeShare transaction timeout (consider retry)", {
+          id,
+          userId: userId.slice(0, 50),
+        });
+      } else {
+        log.error("removeShare transaction failed", {
+          id,
+          userId: userId.slice(0, 50),
+          error: errorMsg,
+        });
+      }
       return false;
     }
   },
