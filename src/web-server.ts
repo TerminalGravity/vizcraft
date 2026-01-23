@@ -41,6 +41,7 @@ import {
 import type { DiagramSpec, DiagramType } from "./types";
 import { join, extname } from "path";
 import { escapeRegex } from "./utils/regex";
+import { getContentDisposition } from "./utils/content-disposition";
 import { rateLimiters } from "./api/rate-limiter";
 import { runHealthChecks, livenessCheck, readinessCheck } from "./api/health";
 import { securityHeaders, apiSecurityHeaders } from "./api/security-headers";
@@ -1912,8 +1913,6 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
       cacheStatus = "MISS";
     }
 
-    // Sanitize filename
-    const safeName = diagram.name.replace(/[^a-zA-Z0-9-_]/g, "_");
     // Get security headers for SVG content
     const secHeaders = getSvgSecurityHeaders();
     // Use version-based ETag for client caching
@@ -1922,7 +1921,7 @@ app.get("/api/diagrams/:id/export/svg", rateLimiters.export, (c) => {
     return new Response(svg, {
       headers: {
         ...secHeaders,
-        "Content-Disposition": `attachment; filename="${safeName}.svg"`,
+        "Content-Disposition": getContentDisposition(diagram.name, ".svg"),
         "Cache-Control": "private, max-age=300", // 5 min client cache
         "ETag": etag,
         "X-Cache": cacheStatus,
