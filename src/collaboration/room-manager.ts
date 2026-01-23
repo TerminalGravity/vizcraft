@@ -631,8 +631,13 @@ class RoomManager {
   // Private helpers
 
   private send(ws: WebSocketConnection, message: ServerMessage): void {
-    if (ws.readyState === 1) {
+    if (ws.readyState !== 1) return;
+    try {
       ws.send(JSON.stringify(message));
+    } catch (err) {
+      log.warn("Failed to send WebSocket message", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -641,11 +646,25 @@ class RoomManager {
     const roomConns = this.roomConnections.get(diagramId);
     if (!roomConns || roomConns.size === 0) return;
 
-    const messageStr = JSON.stringify(message);
+    let messageStr: string;
+    try {
+      messageStr = JSON.stringify(message);
+    } catch (err) {
+      log.warn("Failed to serialize broadcast message", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
 
     for (const ws of roomConns) {
       if (ws !== exclude && ws.readyState === 1) {
-        ws.send(messageStr);
+        try {
+          ws.send(messageStr);
+        } catch (err) {
+          log.warn("Failed to send broadcast message", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }

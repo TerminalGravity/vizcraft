@@ -210,7 +210,7 @@ export class AnthropicProvider implements LLMProvider {
         if (!parseResult.success) {
           log.error("Invalid tool output", { error: parseResult.error.message });
           if (attempt < maxRetries) {
-            await this.delay(Math.pow(2, attempt) * 500); // Exponential backoff
+            await this.backoffDelay(attempt); // Exponential backoff
             continue;
           }
           return {
@@ -259,7 +259,7 @@ export class AnthropicProvider implements LLMProvider {
         log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
         if (attempt < maxRetries) {
-          await this.delay(Math.pow(2, attempt) * 500);
+          await this.backoffDelay(attempt);
         }
       }
     }
@@ -301,6 +301,18 @@ export class AnthropicProvider implements LLMProvider {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Exponential backoff with jitter to prevent thundering herd.
+   * @param attempt - Zero-based attempt number
+   * @param baseMs - Base delay in milliseconds (default 500)
+   * @param maxMs - Maximum delay cap (default 60000)
+   */
+  private backoffDelay(attempt: number, baseMs = 500, maxMs = 60000): Promise<void> {
+    const exponential = Math.min(Math.pow(2, attempt) * baseMs, maxMs);
+    const jitter = Math.random() * 0.2 * exponential; // 0-20% jitter
+    return this.delay(exponential + jitter);
   }
 }
 

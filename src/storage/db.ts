@@ -1190,7 +1190,7 @@ export const storage = {
     }
 
     const result = db.run(
-      `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
+      `UPDATE diagrams SET shares = ?, version = version + 1, updated_at = ? WHERE id = ?`,
       [JSON.stringify(shares), new Date().toISOString(), id]
     );
     return result.changes > 0;
@@ -1233,9 +1233,9 @@ export const storage = {
         }
       }
 
-      // Write back within same transaction
+      // Write back within same transaction (increment version to track share changes)
       const result = db.run(
-        `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE diagrams SET shares = ?, version = version + 1, updated_at = ? WHERE id = ?`,
         [JSON.stringify(filtered), new Date().toISOString(), id]
       );
       return result.changes > 0;
@@ -1280,9 +1280,9 @@ export const storage = {
 
       const filtered = shares.filter((s) => s.userId !== userId);
 
-      // Write back within same transaction
+      // Write back within same transaction (increment version to track share changes)
       const result = db.run(
-        `UPDATE diagrams SET shares = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE diagrams SET shares = ?, version = version + 1, updated_at = ? WHERE id = ?`,
         [JSON.stringify(filtered), new Date().toISOString(), id]
       );
       return result.changes > 0;

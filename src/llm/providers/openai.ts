@@ -230,7 +230,7 @@ export class OpenAIProvider implements LLMProvider {
         } catch (parseError) {
           log.error("Failed to parse function arguments", { args: toolCall.function.arguments });
           if (attempt < maxRetries) {
-            await this.delay(Math.pow(2, attempt) * 500);
+            await this.backoffDelay(attempt);
             continue;
           }
           return {
@@ -245,7 +245,7 @@ export class OpenAIProvider implements LLMProvider {
         if (!parseResult.success) {
           log.error("Invalid tool output", { error: parseResult.error.message });
           if (attempt < maxRetries) {
-            await this.delay(Math.pow(2, attempt) * 500);
+            await this.backoffDelay(attempt);
             continue;
           }
           return {
@@ -295,10 +295,10 @@ export class OpenAIProvider implements LLMProvider {
 
         // Check for rate limiting
         if (lastError.message.includes("429") || lastError.message.includes("rate limit")) {
-          // Wait longer for rate limits
-          await this.delay(Math.pow(2, attempt) * 2000);
+          // Wait longer for rate limits (2000ms base instead of 500ms)
+          await this.backoffDelay(attempt, 2000);
         } else if (attempt < maxRetries) {
-          await this.delay(Math.pow(2, attempt) * 500);
+          await this.backoffDelay(attempt);
         }
       }
     }
@@ -340,6 +340,18 @@ export class OpenAIProvider implements LLMProvider {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Exponential backoff with jitter to prevent thundering herd.
+   * @param attempt - Zero-based attempt number
+   * @param baseMs - Base delay in milliseconds (default 500)
+   * @param maxMs - Maximum delay cap (default 60000)
+   */
+  private backoffDelay(attempt: number, baseMs = 500, maxMs = 60000): Promise<void> {
+    const exponential = Math.min(Math.pow(2, attempt) * baseMs, maxMs);
+    const jitter = Math.random() * 0.2 * exponential; // 0-20% jitter
+    return this.delay(exponential + jitter);
   }
 }
 
