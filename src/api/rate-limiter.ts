@@ -91,18 +91,20 @@ function evictLRUEntries(count: number): number {
   if (rateLimitStore.size === 0 || count <= 0) return 0;
 
   // Sort by lastAccess (oldest first) for LRU eviction
+  // Slice to limit work and avoid sorting more than needed
   const entries = Array.from(rateLimitStore.entries())
-    .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
+    .sort((a, b) => a[1].lastAccess - b[1].lastAccess)
+    .slice(0, Math.min(count, rateLimitStore.size));
 
-  const toEvict = Math.min(count, entries.length);
-  for (let i = 0; i < toEvict; i++) {
-    const entry = entries[i];
-    if (entry) {
-      rateLimitStore.delete(entry[0]);
+  // Track actual deletions (Map.delete returns false if key missing)
+  let deleted = 0;
+  for (const [key] of entries) {
+    if (rateLimitStore.delete(key)) {
+      deleted++;
     }
   }
 
-  return toEvict;
+  return deleted;
 }
 
 /**
