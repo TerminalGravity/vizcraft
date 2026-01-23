@@ -6,11 +6,161 @@
 import dagre from "@dagrejs/dagre";
 import type { DiagramSpec, DiagramNode } from "../types";
 import type { LoadedAgent } from "./loader";
-import { getProvider } from "../llm";
+import { getProvider, listConfiguredProviders } from "../llm";
 import { circuitBreakers, CircuitBreakerError } from "../utils/circuit-breaker";
 import { createLogger } from "../logging";
 
 const log = createLogger("agents");
+
+// ==================== Error Classification ====================
+
+/**
+ * Error categories for actionable guidance
+ */
+type ErrorCategory =
+  | "authentication"
+  | "rate_limit"
+  | "network"
+  | "timeout"
+  | "invalid_response"
+  | "configuration"
+  | "unknown";
+
+/**
+ * Classify an error to provide targeted guidance
+ */
+function classifyError(error: Error | unknown): ErrorCategory {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  // Authentication errors
+  if (
+    message.includes("401") ||
+    message.includes("unauthorized") ||
+    message.includes("invalid api key") ||
+    message.includes("authentication") ||
+    message.includes("invalid_api_key")
+  ) {
+    return "authentication";
+  }
+
+  // Rate limiting
+  if (
+    message.includes("429") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("quota") ||
+    message.includes("overloaded")
+  ) {
+    return "rate_limit";
+  }
+
+  // Network errors
+  if (
+    message.includes("econnrefused") ||
+    message.includes("enotfound") ||
+    message.includes("network") ||
+    message.includes("dns") ||
+    message.includes("connection refused") ||
+    message.includes("fetch failed")
+  ) {
+    return "network";
+  }
+
+  // Timeout errors
+  if (message.includes("timeout") || message.includes("timed out") || message.includes("etimedout")) {
+    return "timeout";
+  }
+
+  // Invalid response from LLM
+  if (
+    message.includes("invalid") ||
+    message.includes("parse") ||
+    message.includes("schema") ||
+    message.includes("validation")
+  ) {
+    return "invalid_response";
+  }
+
+  // Configuration errors
+  if (
+    message.includes("not configured") ||
+    message.includes("missing") ||
+    message.includes("undefined")
+  ) {
+    return "configuration";
+  }
+
+  return "unknown";
+}
+
+/**
+ * Build an actionable error message with context and suggestions
+ */
+function buildActionableError(
+  operation: string,
+  category: ErrorCategory,
+  originalError?: string
+): string {
+  const parts: string[] = [];
+
+  // What happened
+  parts.push(`${operation} failed.`);
+
+  // Why it might have happened + How to fix
+  switch (category) {
+    case "authentication":
+      parts.push("Cause: Invalid or expired API key.");
+      parts.push("Fix: Check that your API key is correct and has not been revoked.");
+      parts.push("  - Anthropic: Verify ANTHROPIC_API_KEY in your environment");
+      parts.push("  - OpenAI: Verify OPENAI_API_KEY in your environment");
+      break;
+
+    case "rate_limit":
+      parts.push("Cause: API rate limit exceeded or service overloaded.");
+      parts.push("Fix: Wait a moment and try again, or reduce request frequency.");
+      parts.push("  - Check your API plan limits at the provider dashboard");
+      parts.push("  - Consider using a different provider temporarily");
+      break;
+
+    case "network":
+      parts.push("Cause: Network connectivity issue.");
+      parts.push("Fix: Check your internet connection and firewall settings.");
+      parts.push("  - Verify the API endpoint is reachable");
+      parts.push("  - For Ollama: Ensure the server is running (ollama serve)");
+      break;
+
+    case "timeout":
+      parts.push("Cause: Request took too long to complete.");
+      parts.push("Fix: Try a simpler transformation or check service status.");
+      parts.push("  - Complex diagrams may need multiple smaller changes");
+      parts.push("  - Check provider status page for outages");
+      break;
+
+    case "invalid_response":
+      parts.push("Cause: LLM returned malformed output.");
+      parts.push("Fix: Try rephrasing your request or use a different model.");
+      parts.push("  - Simpler prompts often produce better structured output");
+      parts.push("  - This may indicate a temporary model issue");
+      break;
+
+    case "configuration":
+      parts.push("Cause: Missing or invalid configuration.");
+      parts.push("Fix: Check agent YAML and environment variables.");
+      break;
+
+    case "unknown":
+    default:
+      parts.push("Cause: Unexpected error occurred.");
+      if (originalError) {
+        parts.push(`Details: ${originalError}`);
+      }
+      parts.push("Fix: Check logs for more details or try again.");
+      break;
+  }
+
+  return parts.join("\n");
+}
 
 export interface AgentRunResult {
   success: boolean;
@@ -33,7 +183,22 @@ export async function runAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<A
         return { success: false, error: `Unknown agent type: ${agent.type}` };
     }
   } catch (err) {
-    return { success: false, error: `Agent execution failed: ${err}` };
+    const category = classifyError(err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    log.error("Agent execution failed", {
+      agent: agent.name,
+      type: agent.type,
+      category,
+      error: errorMessage,
+    });
+    return {
+      success: false,
+      error: buildActionableError(
+        `Agent "${agent.name}" (${agent.type})`,
+        category,
+        errorMessage
+      ),
+    };
   }
 }
 
@@ -112,23 +277,74 @@ async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Agent
   const provider = getProvider(agent.provider);
 
   if (!provider) {
+    const configuredProviders = listConfiguredProviders();
+    const providerList =
+      configuredProviders.length > 0
+        ? configuredProviders.map((p) => `${p.name} (${p.type})`).join(", ")
+        : "none";
+
     return {
       success: false,
-      error: `No LLM provider configured. Set ANTHROPIC_API_KEY environment variable.`,
+      error: [
+        `LLM agent "${agent.name}" requires a provider but none is available.`,
+        `Requested provider: ${agent.provider || "default (anthropic)"}`,
+        `Available providers: ${providerList}`,
+        "",
+        "To fix this, set one of these environment variables:",
+        "  - ANTHROPIC_API_KEY for Claude models",
+        "  - OPENAI_API_KEY for GPT models",
+        "  - OLLAMA_HOST (default: localhost:11434) for local Ollama models",
+      ].join("\n"),
     };
   }
 
   if (!provider.isConfigured) {
+    const envVar =
+      provider.type === "anthropic"
+        ? "ANTHROPIC_API_KEY"
+        : provider.type === "openai"
+          ? "OPENAI_API_KEY"
+          : provider.type === "ollama"
+            ? "OLLAMA_HOST"
+            : `${provider.type.toUpperCase()}_API_KEY`;
+
     return {
       success: false,
-      error: `${provider.name} is not configured. Check your API key.`,
+      error: [
+        `${provider.name} provider is not properly configured.`,
+        "",
+        "Possible causes:",
+        `  - ${envVar} environment variable is not set`,
+        `  - ${envVar} contains an invalid or expired key`,
+        provider.type === "ollama"
+          ? "  - Ollama server is not running (start with: ollama serve)"
+          : "",
+        "",
+        "To fix this:",
+        provider.type === "ollama"
+          ? `  1. Start Ollama: ollama serve`
+          : `  1. Get an API key from the ${provider.name} dashboard`,
+        `  2. Set the environment variable: export ${envVar}=your-key`,
+        "  3. Restart the application",
+      ]
+        .filter(Boolean)
+        .join("\n"),
     };
   }
 
   if (!agent.prompt) {
     return {
       success: false,
-      error: `LLM agent "${agent.name}" has no prompt defined.`,
+      error: [
+        `LLM agent "${agent.name}" has no prompt defined.`,
+        "",
+        "LLM agents require a 'prompt' field in their YAML configuration.",
+        "Example:",
+        "  type: llm",
+        "  prompt: 'Add helpful annotations explaining each component'",
+        "",
+        "Check the agent file at: data/agents/${agent.name}.yaml",
+      ].join("\n"),
     };
   }
 
@@ -169,20 +385,58 @@ async function runLLMAgent(agent: LoadedAgent, spec: DiagramSpec): Promise<Agent
       };
     }
 
+    // Provider returned an error response (not exception) - still classify it
+    const category = classifyError(new Error(result.error || "LLM transformation failed"));
+    log.error("LLM transformation returned error", {
+      agent: agent.name,
+      provider: provider.name,
+      category,
+      error: result.error,
+    });
+
     return {
       success: false,
-      error: result.error || "LLM transformation failed",
+      error: buildActionableError(
+        `LLM transformation via ${provider.name}`,
+        category,
+        result.error
+      ),
     };
   } catch (err) {
     if (err instanceof CircuitBreakerError) {
       return {
         success: false,
-        error: `LLM service temporarily unavailable. Please retry in ${err.retryAfter} seconds.`,
+        error: [
+          "LLM service temporarily unavailable (circuit breaker open).",
+          "",
+          "The service has experienced multiple failures and is being protected.",
+          `Please retry in ${err.retryAfter} seconds.`,
+          "",
+          "If this persists:",
+          "  - Check the provider's status page for outages",
+          "  - Verify your API key is valid",
+          "  - Try using a different provider",
+        ].join("\n"),
       };
     }
+
+    const category = classifyError(err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
+
+    log.error("LLM call failed", {
+      agent: agent.name,
+      provider: provider.name,
+      category,
+      error: errorMessage,
+    });
+
     return {
       success: false,
-      error: `LLM call failed: ${err instanceof Error ? err.message : String(err)}`,
+      error: buildActionableError(
+        `LLM transformation via ${provider.name}`,
+        category,
+        errorMessage
+      ),
     };
   }
 }

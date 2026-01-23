@@ -140,4 +140,87 @@ describe("Agent Runner", () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain("no prompt defined");
   });
+
+  test("LLM agent error includes actionable guidance", async () => {
+    const agent: LoadedAgent = {
+      id: "test-llm-no-prompt",
+      name: "Test LLM No Prompt",
+      type: "llm",
+      provider: "anthropic",
+      filename: "test.yaml",
+      loadedAt: new Date().toISOString(),
+    };
+
+    const result = await runAgent(agent, sampleSpec);
+
+    expect(result.success).toBe(false);
+    // Should include helpful guidance, not just the error
+    expect(result.error).toContain("LLM agents require");
+    expect(result.error).toContain("Example:");
+  });
+
+  test("unknown agent type returns descriptive error", async () => {
+    const agent: LoadedAgent = {
+      id: "test-unknown",
+      name: "Test Unknown",
+      type: "invalid-type" as LoadedAgent["type"],
+      filename: "test.yaml",
+      loadedAt: new Date().toISOString(),
+    };
+
+    const result = await runAgent(agent, sampleSpec);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Unknown agent type");
+  });
+});
+
+describe("Error Classification", () => {
+  // These tests verify that error messages are actionable
+
+  test("authentication errors include fix guidance", async () => {
+    // When an LLM agent fails with auth error, error should be helpful
+    const agent: LoadedAgent = {
+      id: "test-llm",
+      name: "Test Auth",
+      type: "llm",
+      provider: "anthropic",
+      prompt: "Test prompt",
+      filename: "test.yaml",
+      loadedAt: new Date().toISOString(),
+    };
+
+    const result = await runAgent(agent, sampleSpec);
+
+    // If not configured or auth fails, should have actionable error
+    if (!result.success && result.error) {
+      // Error should contain actionable guidance
+      expect(
+        result.error.includes("Fix:") ||
+          result.error.includes("To fix") ||
+          result.error.includes("API key") ||
+          result.error.includes("environment variable")
+      ).toBe(true);
+    }
+  });
+
+  test("missing provider error lists available providers", async () => {
+    const agent: LoadedAgent = {
+      id: "test-unknown-provider",
+      name: "Test Unknown Provider",
+      type: "llm",
+      provider: "nonexistent" as LoadedAgent["provider"],
+      prompt: "Test prompt",
+      filename: "test.yaml",
+      loadedAt: new Date().toISOString(),
+    };
+
+    const result = await runAgent(agent, sampleSpec);
+
+    expect(result.success).toBe(false);
+    // Should list what providers are available
+    expect(result.error).toContain("Available providers:");
+    // Should include setup instructions
+    expect(result.error).toContain("environment variable");
+  });
 });
