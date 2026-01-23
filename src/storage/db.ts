@@ -83,10 +83,53 @@ db.run(`
   )
 `);
 
+// =============================================================================
+// ID Validation
+// =============================================================================
+
+/**
+ * Nanoid format pattern for diagram IDs
+ *
+ * Our IDs are generated with nanoid(12) using the default alphabet:
+ * A-Za-z0-9_- (64 characters, URL-safe)
+ *
+ * This validation ensures:
+ * 1. Correct length (12 characters)
+ * 2. Only valid characters (prevents path traversal, SQL oddities)
+ * 3. Defense-in-depth against malformed external input
+ */
+const NANOID_PATTERN = /^[A-Za-z0-9_-]{12}$/;
+
+/**
+ * Validate a diagram ID format
+ *
+ * Diagram IDs are nanoid(12) strings using the default URL-safe alphabet.
+ * This validation should be called when processing external input (API requests)
+ * to prevent path traversal attacks in thumbnail storage and ensure data integrity.
+ *
+ * @param id - The diagram ID to validate
+ * @returns true if valid nanoid format, false otherwise
+ */
+export function validateDiagramId(id: unknown): id is string {
+  return typeof id === "string" && NANOID_PATTERN.test(id);
+}
+
+// =============================================================================
+// PRAGMA Utilities
+// =============================================================================
+
 /**
  * Check if a column exists in a table
- * Note: PRAGMA doesn't support parameterized queries, so we construct the query directly.
- * The table name comes from our own code (not user input), so this is safe.
+ *
+ * SECURITY NOTE: PRAGMA table_info() does not support parameterized queries.
+ * SQLite's PRAGMA commands use direct string interpolation by design.
+ *
+ * This is SAFE because:
+ * 1. Table/column names come from our own migration code, never user input
+ * 2. All callers are internal (migrateAddColumn) with hardcoded strings
+ * 3. The string interpolation is unavoidable for PRAGMA commands
+ *
+ * DO NOT expose this function or use it with user-provided table/column names.
  */
 function columnExists(table: string, column: string): boolean {
   // PRAGMA requires direct string interpolation (doesn't support parameterized queries)
@@ -1094,13 +1137,28 @@ export const storage = {
 
   /**
    * Clean up orphaned thumbnails (thumbnails without matching diagrams)
+   * Uses batched iteration to prevent OOM with large databases
    */
   async cleanupOrphanedThumbnails(): Promise<number> {
-    // Get all diagram IDs
-    const rows = db.query<{ id: string }, []>(
-      `SELECT id FROM diagrams`
-    ).all();
-    const existingIds = new Set(rows.map((r) => r.id));
+    const BATCH_SIZE = 1000;
+    const existingIds = new Set<string>();
+
+    // Paginated query to prevent OOM with millions of diagrams
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const rows = db.query<{ id: string }, [number, number]>(
+        `SELECT id FROM diagrams LIMIT ? OFFSET ?`
+      ).all(BATCH_SIZE, offset);
+
+      for (const row of rows) {
+        existingIds.add(row.id);
+      }
+
+      hasMore = rows.length === BATCH_SIZE;
+      offset += BATCH_SIZE;
+    }
 
     return cleanupOrphanThumbnails(existingIds);
   },

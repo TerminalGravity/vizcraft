@@ -1259,3 +1259,91 @@ describe("Edge Cases and Error Handling", () => {
     expect(uniqueNumbers.size).toBe(11);
   });
 });
+
+// Import validateDiagramId for direct testing
+import { validateDiagramId } from "./db";
+
+describe("validateDiagramId", () => {
+  describe("valid IDs", () => {
+    it("accepts valid 12-character nanoid", () => {
+      // Standard nanoid(12) format
+      expect(validateDiagramId("abc123ABC456")).toBe(true);
+      expect(validateDiagramId("xyz789XYZ012")).toBe(true);
+    });
+
+    it("accepts IDs with underscores", () => {
+      expect(validateDiagramId("abc_def_gh12")).toBe(true);
+      expect(validateDiagramId("____________")).toBe(true);
+    });
+
+    it("accepts IDs with hyphens", () => {
+      expect(validateDiagramId("abc-def-gh12")).toBe(true);
+      expect(validateDiagramId("------------")).toBe(true);
+    });
+
+    it("accepts mixed alphanumeric, underscore, hyphen", () => {
+      expect(validateDiagramId("aB3_cD5-eF78")).toBe(true);
+      expect(validateDiagramId("A-B_C-D_E-F1")).toBe(true);
+    });
+
+    it("accepts actual nanoid outputs", () => {
+      // Generate a few real nanoids to test
+      for (let i = 0; i < 10; i++) {
+        const id = nanoid(12);
+        expect(validateDiagramId(id)).toBe(true);
+      }
+    });
+  });
+
+  describe("invalid IDs", () => {
+    it("rejects non-string values", () => {
+      expect(validateDiagramId(null)).toBe(false);
+      expect(validateDiagramId(undefined)).toBe(false);
+      expect(validateDiagramId(123456789012)).toBe(false);
+      expect(validateDiagramId({})).toBe(false);
+      expect(validateDiagramId([])).toBe(false);
+    });
+
+    it("rejects wrong length", () => {
+      // Too short
+      expect(validateDiagramId("")).toBe(false);
+      expect(validateDiagramId("a")).toBe(false);
+      expect(validateDiagramId("abc12345678")).toBe(false); // 11 chars
+
+      // Too long
+      expect(validateDiagramId("abc1234567890")).toBe(false); // 13 chars
+      expect(validateDiagramId("abc123456789012345")).toBe(false);
+    });
+
+    it("rejects path traversal attempts", () => {
+      // These would be security issues if accepted
+      expect(validateDiagramId("../../../etc")).toBe(false);
+      expect(validateDiagramId("..\\..\\..\\et")).toBe(false);
+      expect(validateDiagramId("abc/../def/g")).toBe(false);
+    });
+
+    it("rejects special characters", () => {
+      expect(validateDiagramId("abc!@#$%^&*()")).toBe(false);
+      expect(validateDiagramId("abc<>{}[]|\\")).toBe(false);
+      expect(validateDiagramId("abc 123 456 ")).toBe(false); // spaces
+      expect(validateDiagramId("abc\t123\n456")).toBe(false); // tabs/newlines
+    });
+
+    it("rejects SQL injection attempts", () => {
+      expect(validateDiagramId("abc'; DROP--")).toBe(false);
+      expect(validateDiagramId("1 OR 1=1; --")).toBe(false);
+      expect(validateDiagramId("abc\" OR \"1\"")).toBe(false);
+    });
+
+    it("rejects unicode characters", () => {
+      expect(validateDiagramId("abc123测试456")).toBe(false);
+      expect(validateDiagramId("abc123🎨🎭ab")).toBe(false);
+      expect(validateDiagramId("àbçdéfghîjkl")).toBe(false);
+    });
+
+    it("rejects null bytes", () => {
+      expect(validateDiagramId("abc\x00def12345")).toBe(false);
+      expect(validateDiagramId("abc123\x004567")).toBe(false);
+    });
+  });
+});
