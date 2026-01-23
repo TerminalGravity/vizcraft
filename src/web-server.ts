@@ -669,7 +669,7 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
     // Validate request body with schema
     const parseResult = CreateDiagramRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid diagram request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid diagram request", 400);
     }
     const body = parseResult.data;
 
@@ -720,7 +720,7 @@ app.put("/api/diagrams/:id", diagramBodyLimit, async (c) => {
     // Validate request body with schema
     const parseResult = UpdateDiagramRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid update request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid update request", 400);
     }
     // Keep raw body for force flag (not in schema)
     const body = { ...parseResult.data, force: rawBody.force };
@@ -868,7 +868,7 @@ app.put("/api/diagrams/:id/thumbnail", thumbnailBodyLimit, async (c) => {
     // Validate request body with schema (validates format and size limit)
     const parseResult = UpdateThumbnailRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid thumbnail request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid thumbnail request", 400);
     }
     const body = parseResult.data;
 
@@ -1161,7 +1161,7 @@ app.post("/api/diagrams/:id/fork", rateLimiters.diagramCreate, async (c) => {
     // Validate request body
     const parseResult = ForkDiagramRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid request", 400);
     }
     const body = parseResult.data;
 
@@ -1706,7 +1706,7 @@ app.post("/api/diagrams/:id/apply-layout", rateLimiters.layout, async (c) => {
     // Validate request body with schema
     const parseResult = ApplyLayoutRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid layout request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid layout request", 400);
     }
     const body = parseResult.data;
 
@@ -1801,7 +1801,7 @@ app.post("/api/diagrams/:id/preview-layout", rateLimiters.layout, async (c) => {
     // Validate request body with schema
     const parseResult = ApplyLayoutRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid layout request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid layout request", 400);
     }
     const body = parseResult.data;
 
@@ -1851,7 +1851,7 @@ app.post("/api/diagrams/:id/apply-theme", rateLimiters.layout, async (c) => {
     // Validate request body with schema
     const parseResult = ApplyThemeRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
-      throw new APIError("VALIDATION_ERROR", parseResult.error.errors[0]?.message || "Invalid theme request", 400);
+      throw new APIError("VALIDATION_ERROR", parseResult.error.issues[0]?.message || "Invalid theme request", 400);
     }
     const body = parseResult.data;
 

@@ -388,11 +388,10 @@ export const protectedStorage = {
    */
   getVersionsMetadata(
     diagramId: string,
-    limit: number = 20,
-    offset: number = 0
-  ): { versions: Array<{ version: number; message: string | null; created_at: string }>; total: number } {
+    limit: number = 50
+  ): Array<{ id: string; version: number; message?: string; createdAt: string }> {
     return withProtection("SELECT", "diagram_versions", () =>
-      rawStorage.getVersionsMetadata(diagramId, limit, offset)
+      rawStorage.getVersionsMetadata(diagramId, limit)
     );
   },
 

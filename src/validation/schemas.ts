@@ -104,8 +104,9 @@ export const DiagramTypeSchema = z.enum([
 
 /**
  * Valid diagram types as a Set for O(1) lookup validation
+ * Typed as Set<string> to allow validation of arbitrary input strings
  */
-export const VALID_DIAGRAM_TYPES = new Set(DiagramTypeSchema.options);
+export const VALID_DIAGRAM_TYPES: Set<string> = new Set(DiagramTypeSchema.options);
 
 /**
  * Type for diagram type values
@@ -259,6 +260,7 @@ export const CreateDiagramRequestSchema = z.object({
   name: z.string().min(1, "Name is required").max(LIMITS.NAME_MAX).trim(),
   project: z.string().max(LIMITS.PROJECT_MAX).trim().optional(),
   spec: DiagramSpecSchema,
+  isPublic: z.boolean().optional(),
 });
 
 /**
