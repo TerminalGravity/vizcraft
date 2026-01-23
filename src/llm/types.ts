@@ -17,6 +17,7 @@ export interface LLMProviderConfig {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  timeoutMs?: number; // Request timeout in milliseconds
 }
 
 // Message format (model-agnostic)

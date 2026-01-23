@@ -201,16 +201,19 @@ export class OllamaProvider implements LLMProvider {
         };
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+        const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
 
-        const response = await fetch(`${this.baseUrl}/api/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(ollamaRequest),
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeout);
+        let response: Response;
+        try {
+          response = await fetch(`${this.baseUrl}/api/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(ollamaRequest),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
         const duration = performance.now() - startTime;
 
         if (!response.ok) {

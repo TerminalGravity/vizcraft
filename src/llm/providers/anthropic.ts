@@ -34,6 +34,7 @@ const DEFAULT_CONFIG = {
   model: "claude-sonnet-4-5-20250929",
   maxTokens: 4096,
   temperature: 0.3,
+  timeoutMs: 120_000, // 2 minutes for complex diagram transformations
 };
 
 export class AnthropicProvider implements LLMProvider {
@@ -45,15 +46,19 @@ export class AnthropicProvider implements LLMProvider {
   private apiKey: string | undefined;
 
   constructor(config?: Partial<LLMProviderConfig>) {
-    this.apiKey = config?.apiKey || process.env.ANTHROPIC_API_KEY;
+    this.apiKey = config?.apiKey ?? process.env.ANTHROPIC_API_KEY;
     this.config = {
-      model: config?.model || DEFAULT_CONFIG.model,
-      maxTokens: config?.maxTokens || DEFAULT_CONFIG.maxTokens,
-      temperature: config?.temperature || DEFAULT_CONFIG.temperature,
+      model: config?.model ?? DEFAULT_CONFIG.model,
+      maxTokens: config?.maxTokens ?? DEFAULT_CONFIG.maxTokens,
+      temperature: config?.temperature ?? DEFAULT_CONFIG.temperature,
+      timeoutMs: config?.timeoutMs ?? DEFAULT_CONFIG.timeoutMs,
     };
 
     if (this.apiKey) {
-      this.client = new Anthropic({ apiKey: this.apiKey });
+      this.client = new Anthropic({
+        apiKey: this.apiKey,
+        timeout: this.config.timeoutMs,
+      });
     }
   }
 
@@ -210,22 +215,36 @@ export class AnthropicProvider implements LLMProvider {
 
         const output: DiagramTransformOutput = parseResult.data;
 
+        const usage = {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+          model: this.config.model,
+        };
+
+        log.info("Transform completed", {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          changesCount: output.changes.length,
+        });
+
         return {
           success: true,
           spec: buildUpdatedSpec(spec, output),
           changes: output.changes,
-          usage: {
-            inputTokens: response.usage.input_tokens,
-            outputTokens: response.usage.output_tokens,
-            model: this.config.model,
-          },
+          usage,
         };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         log.error("Attempt failed", { attempt: attempt + 1, error: lastError.message });
 
+        // Check for rate limiting - use slower backoff
+        const isRateLimit =
+          lastError.message.includes("429") ||
+          lastError.message.includes("rate_limit") ||
+          lastError.message.includes("overloaded");
+
         if (attempt < maxRetries) {
-          await backoffDelay(attempt);
+          await backoffDelay(attempt, isRateLimit ? 2000 : 500); // 2x slower backoff for rate limits
         }
       }
     }

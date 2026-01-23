@@ -5,7 +5,6 @@
 
 import type { DiagramSpec } from "../../types";
 import type { DiagramTransformOutput, DiagramTransformResponse } from "../types";
-import { DiagramTransformOutputSchema } from "../types";
 import { circuitBreakers, CircuitBreakerError } from "../../utils/circuit-breaker";
 import type { Logger } from "../../logging";
 
@@ -86,25 +85,6 @@ export function buildDiagramContext(spec: DiagramSpec, prompt: string, context?:
   parts.push(`Instruction: ${prompt}`);
 
   return parts.join("\n");
-}
-
-/**
- * Validate LLM output against the DiagramTransformOutput schema.
- * @returns Validated output or null if invalid and should retry
- * @throws Error if invalid and max retries reached
- */
-export function validateTransformOutput(
-  parsed: unknown,
-  log: Logger
-): DiagramTransformOutput | { error: string } {
-  const parseResult = DiagramTransformOutputSchema.safeParse(parsed);
-
-  if (!parseResult.success) {
-    log.error("Invalid schema", { error: parseResult.error.message });
-    return { error: `Invalid transformation output: ${parseResult.error.message}` };
-  }
-
-  return parseResult.data;
 }
 
 /**

@@ -35,6 +35,7 @@ const DEFAULT_CONFIG = {
   model: "gpt-4o",
   maxTokens: 4096,
   temperature: 0.3,
+  timeoutMs: 120_000, // 2 minutes for complex diagram transformations
 };
 
 // OpenAI function definition for diagram transformation
@@ -117,17 +118,19 @@ export class OpenAIProvider implements LLMProvider {
   private apiKey: string | undefined;
 
   constructor(config?: Partial<LLMProviderConfig>) {
-    this.apiKey = config?.apiKey || process.env.OPENAI_API_KEY;
+    this.apiKey = config?.apiKey ?? process.env.OPENAI_API_KEY;
     this.config = {
-      model: config?.model || DEFAULT_CONFIG.model,
-      maxTokens: config?.maxTokens || DEFAULT_CONFIG.maxTokens,
-      temperature: config?.temperature || DEFAULT_CONFIG.temperature,
+      model: config?.model ?? DEFAULT_CONFIG.model,
+      maxTokens: config?.maxTokens ?? DEFAULT_CONFIG.maxTokens,
+      temperature: config?.temperature ?? DEFAULT_CONFIG.temperature,
+      timeoutMs: config?.timeoutMs ?? DEFAULT_CONFIG.timeoutMs,
     };
 
     if (this.apiKey) {
       this.client = new OpenAI({
         apiKey: this.apiKey,
         baseURL: config?.baseUrl, // Allow custom base URL for Azure OpenAI etc.
+        timeout: this.config.timeoutMs,
       });
     }
   }
@@ -245,15 +248,23 @@ export class OpenAIProvider implements LLMProvider {
 
         const output: DiagramTransformOutput = parseResult.data;
 
+        const usage = {
+          inputTokens: response.usage?.prompt_tokens ?? 0,
+          outputTokens: response.usage?.completion_tokens ?? 0,
+          model: this.config.model,
+        };
+
+        log.info("Transform completed", {
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          changesCount: output.changes.length,
+        });
+
         return {
           success: true,
           spec: buildUpdatedSpec(spec, output),
           changes: output.changes,
-          usage: {
-            inputTokens: response.usage?.prompt_tokens || 0,
-            outputTokens: response.usage?.completion_tokens || 0,
-            model: this.config.model,
-          },
+          usage,
         };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));

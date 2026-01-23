@@ -8,8 +8,6 @@ import {
   backoffDelay,
   buildUpdatedSpec,
   buildDiagramContext,
-  validateTransformOutput,
-  withCircuitBreaker,
   executeWithRetry,
 } from "./shared";
 import type { DiagramSpec } from "../../types";
@@ -204,45 +202,6 @@ describe("shared LLM utilities", () => {
       const result = buildDiagramContext(spec, "Add a database");
 
       expect(result).not.toContain("Context:");
-    });
-  });
-
-  describe("validateTransformOutput", () => {
-    test("returns validated output for valid input", () => {
-      const valid = {
-        nodes: [{ id: "n1", label: "Test" }],
-        edges: [],
-        changes: ["Added node"],
-      };
-
-      const result = validateTransformOutput(valid, log);
-
-      expect("error" in result).toBe(false);
-      expect((result as DiagramTransformOutput).nodes).toHaveLength(1);
-    });
-
-    test("returns error for invalid input", () => {
-      const invalid = {
-        nodes: "not an array",
-        edges: [],
-        changes: [],
-      };
-
-      const result = validateTransformOutput(invalid, log);
-
-      expect("error" in result).toBe(true);
-      expect((result as { error: string }).error).toContain("Invalid transformation output");
-    });
-
-    test("returns error for missing required fields", () => {
-      const incomplete = {
-        nodes: [],
-        // missing edges and changes
-      };
-
-      const result = validateTransformOutput(incomplete, log);
-
-      expect("error" in result).toBe(true);
     });
   });
 
