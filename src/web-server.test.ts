@@ -838,8 +838,7 @@ describe("Diagrams API", () => {
       expect(data.error.code).toBe("VALIDATION_ERROR");
       expect(data.error.message).toContain("Offset cannot exceed");
       expect(data.error.message).toContain("10000");
-      expect(data.error.details.field).toBe("offset");
-      expect(data.error.details.received).toBe(10001);
+      // Note: details only included in development mode (security)
     });
 
     it("accepts offset at maximum boundary", async () => {
@@ -966,7 +965,7 @@ describe("Diagrams API", () => {
 
       const data = await res.json();
       expect(data.error.code).toBe("VERSION_CONFLICT");
-      expect(data.error.details.currentVersion).toBe(diagram.version);
+      // Note: details only included in development mode (security)
     });
 
     it("creates new version on update", async () => {

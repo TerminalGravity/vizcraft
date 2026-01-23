@@ -123,20 +123,43 @@ describe("errorFromCode", () => {
     expect(body.error.message).toBe("Diagram xyz not found");
   });
 
-  it("creates error response with details", async () => {
-    const app = new Hono();
-    app.get("/test-details", (c) =>
+  it("includes details only in development mode (security)", async () => {
+    const originalEnv = process.env.NODE_ENV;
+
+    // In development mode, details are included
+    process.env.NODE_ENV = "development";
+    const devApp = new Hono();
+    devApp.get("/test-details", (c) =>
       errorFromCode(c, ApiError.VALIDATION_ERROR, "Invalid fields", {
         fields: ["name", "email"],
       })
     );
 
-    const res = await app.request("/test-details");
-    const body = await res.json();
+    const devRes = await devApp.request("/test-details");
+    const devBody = await devRes.json();
 
-    expect(res.status).toBe(400);
-    expect(body.error.code).toBe("VALIDATION_ERROR");
-    expect(body.error.details).toEqual({ fields: ["name", "email"] });
+    expect(devRes.status).toBe(400);
+    expect(devBody.error.code).toBe("VALIDATION_ERROR");
+    expect(devBody.error.details).toEqual({ fields: ["name", "email"] });
+
+    // In production mode, details are excluded
+    process.env.NODE_ENV = "production";
+    const prodApp = new Hono();
+    prodApp.get("/test-details", (c) =>
+      errorFromCode(c, ApiError.VALIDATION_ERROR, "Invalid fields", {
+        fields: ["name", "email"],
+      })
+    );
+
+    const prodRes = await prodApp.request("/test-details");
+    const prodBody = await prodRes.json();
+
+    expect(prodRes.status).toBe(400);
+    expect(prodBody.error.code).toBe("VALIDATION_ERROR");
+    expect(prodBody.error.details).toBeUndefined();
+
+    // Restore
+    process.env.NODE_ENV = originalEnv;
   });
 
   it("works with different status codes", async () => {

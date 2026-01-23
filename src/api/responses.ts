@@ -123,6 +123,7 @@ export function paginatedResponse<T>(
 
 /**
  * Build an error response
+ * Note: details are only included in development mode to prevent information leakage
  */
 export function errorResponse(
   c: Context,
@@ -131,11 +132,14 @@ export function errorResponse(
   status: 400 | 401 | 403 | 404 | 408 | 409 | 422 | 428 | 429 | 500 | 502 | 503 | 504 = 400,
   details?: unknown
 ) {
+  // Only include details in development mode to prevent information leakage
+  const includeDetails = details !== undefined && process.env.NODE_ENV === "development";
+
   const response: ErrorResponse = {
     error: {
       code,
       message,
-      ...(details !== undefined && { details }),
+      ...(includeDetails && { details }),
     },
   };
   return c.json(response, status);

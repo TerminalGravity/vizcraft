@@ -1428,10 +1428,10 @@ app.get("/api/audit", rateLimiters.admin, requireAuth(), (c) => {
       }
     }
 
-    // Validate action parameter if provided
+    // Validate action parameter if provided (don't echo invalid value - security)
     const action = actionParam && isValidAuditAction(actionParam) ? actionParam : undefined;
     if (actionParam && !action) {
-      return errorFromCode(c, ApiError.INVALID_ACTION, `Invalid audit action: ${actionParam}`);
+      return errorFromCode(c, ApiError.INVALID_ACTION, "Invalid audit action parameter");
     }
 
     const entries = getAuditLog({
@@ -1488,10 +1488,22 @@ app.get("/api/collab/stats", rateLimiters.admin, requireAuth(), (c) => {
   }
 });
 
-// Get room info for a diagram
-app.get("/api/collab/rooms/:diagramId", (c) => {
+// Get room info for a diagram (requires read permission)
+app.get("/api/collab/rooms/:diagramId", optionalAuth(), (c) => {
   try {
     const diagramId = validateDiagramId(c.req.param("diagramId"));
+
+    // Verify diagram exists and user has read access
+    const diagram = storage.getDiagram(diagramId);
+    if (!diagram) {
+      throw new APIError("NOT_FOUND", "Diagram not found", 404);
+    }
+
+    const user = getCurrentUser(c);
+    const ownership = parseOwnership(diagram);
+    if (!canRead(user, ownership)) {
+      throw new PermissionDeniedError("read", diagramId);
+    }
 
     const roomInfo = getRoomInfo(diagramId);
     if (!roomInfo) {
@@ -1509,6 +1521,7 @@ app.get("/api/collab/rooms/:diagramId", (c) => {
     });
   } catch (err) {
     if (err instanceof APIError) throw err;
+    if (err instanceof PermissionDeniedError) throw err;
     log.error("Get room info failed", { error: err instanceof Error ? err.message : String(err) });
     return errorFromCode(c, ApiError.ROOM_INFO_FAILED);
   }

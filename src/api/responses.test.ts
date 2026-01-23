@@ -188,18 +188,37 @@ describe("errorResponse", () => {
     });
   });
 
-  it("includes details when provided", async () => {
-    const app = createTestApp();
-    app.get("/test", (c) =>
+  it("includes details only in development mode", async () => {
+    const originalEnv = process.env.NODE_ENV;
+
+    // Test development mode - details included
+    process.env.NODE_ENV = "development";
+    const devApp = createTestApp();
+    devApp.get("/test", (c) =>
       errorResponse(c, "VALIDATION_ERROR", "Invalid fields", 400, {
         fields: ["name", "email"],
       })
     );
 
-    const res = await app.request("/test");
-    const json = await getJsonResponse(res);
+    const devRes = await devApp.request("/test");
+    const devJson = await getJsonResponse(devRes);
+    expect(devJson.error.details).toEqual({ fields: ["name", "email"] });
 
-    expect(json.error.details).toEqual({ fields: ["name", "email"] });
+    // Test production mode - details excluded (security)
+    process.env.NODE_ENV = "production";
+    const prodApp = createTestApp();
+    prodApp.get("/test", (c) =>
+      errorResponse(c, "VALIDATION_ERROR", "Invalid fields", 400, {
+        fields: ["name", "email"],
+      })
+    );
+
+    const prodRes = await prodApp.request("/test");
+    const prodJson = await getJsonResponse(prodRes);
+    expect(prodJson.error.details).toBeUndefined();
+
+    // Restore original
+    process.env.NODE_ENV = originalEnv;
   });
 
   it("supports different status codes", async () => {
@@ -255,16 +274,33 @@ describe("validationErrorResponse", () => {
     expect(json.error.message).toBe("Name is required");
   });
 
-  it("includes details when provided", async () => {
-    const app = createTestApp();
-    app.get("/test", (c) =>
+  it("includes details only in development mode", async () => {
+    const originalEnv = process.env.NODE_ENV;
+
+    // Test development mode - details included
+    process.env.NODE_ENV = "development";
+    const devApp = createTestApp();
+    devApp.get("/test", (c) =>
       validationErrorResponse(c, "Invalid input", { field: "email" })
     );
 
-    const res = await app.request("/test");
-    const json = await getJsonResponse(res);
+    const devRes = await devApp.request("/test");
+    const devJson = await getJsonResponse(devRes);
+    expect(devJson.error.details).toEqual({ field: "email" });
 
-    expect(json.error.details).toEqual({ field: "email" });
+    // Test production mode - details excluded (security)
+    process.env.NODE_ENV = "production";
+    const prodApp = createTestApp();
+    prodApp.get("/test", (c) =>
+      validationErrorResponse(c, "Invalid input", { field: "email" })
+    );
+
+    const prodRes = await prodApp.request("/test");
+    const prodJson = await getJsonResponse(prodRes);
+    expect(prodJson.error.details).toBeUndefined();
+
+    // Restore original
+    process.env.NODE_ENV = originalEnv;
   });
 });
 
