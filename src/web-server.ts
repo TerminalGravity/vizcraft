@@ -482,8 +482,9 @@ app.get("/api/diagrams", async (c) => {
 
     // Use SQL-level pagination with permission filtering for better performance
     // Permission filtering at SQL level ensures accurate pagination and counts
-    const queryPromise = Promise.resolve().then(() => {
-      const result = storage.listDiagramsPaginated({
+    // Run independent queries in parallel for reduced latency
+    const queryPromise = Promise.all([
+      storage.listDiagramsPaginated({
         project,
         limit,
         offset,
@@ -498,10 +499,9 @@ app.get("/api/diagrams", async (c) => {
         // Pass userId for SQL-level permission filtering
         // null = anonymous user (sees only public), undefined = no filtering
         userId: user?.id ?? null,
-      });
-      const projects = storage.listProjects();
-      return { ...result, projects };
-    });
+      }),
+      storage.listProjects(),
+    ]).then(([result, projects]) => ({ ...result, projects }));
 
     const { data: diagrams, total, projects } = await withListTimeout(queryPromise);
 
@@ -681,6 +681,8 @@ app.post("/api/diagrams", rateLimiters.diagramCreate, diagramBodyLimit, async (c
     // Invalidate list cache (new diagram added)
     listCache.invalidatePattern(/^list:/);
 
+    // Return 201 Created with Location header per REST convention
+    c.header("Location", `/api/diagrams/${diagram.id}`);
     return c.json(diagram, 201);
   } catch (err) {
     log.error("Create diagram failed", { error: err instanceof Error ? err.message : String(err) });
@@ -1005,11 +1007,12 @@ app.post("/api/diagrams/:id/restore/:version", async (c) => {
     }, getAuditContext(c.req.raw));
 
     log.info("Restored diagram", { diagramId: id, version: versionNum });
+    c.header("Location", `/api/diagrams/${id}`);
     return c.json({
       success: true,
       diagram: restored,
       message: `Restored to version ${versionNum}`,
-    });
+    }, 201);
   } catch (err) {
     if (err instanceof APIError) throw err;
     if (err instanceof PermissionDeniedError) throw err;
@@ -1123,11 +1126,12 @@ app.post("/api/diagrams/:id/fork", async (c) => {
     }, getAuditContext(c.req.raw));
 
     log.info("Forked diagram", { originalId: id, newId: forked.id });
+    c.header("Location", `/api/diagrams/${forked.id}`);
     return c.json({
       success: true,
       diagram: forked,
       originalId: id,
-    });
+    }, 201);
   } catch (err) {
     if (err instanceof APIError) throw err;
     if (err instanceof PermissionDeniedError) throw err;
